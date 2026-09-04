@@ -1,9 +1,13 @@
+import type { PackageScanApi } from '../../app/useProductScan.ts';
+import { PackageScanPanel } from '../package-scan/PackageScanPanel.tsx';
 import type { ProductLookupResult } from '../../services/product-data/productLookupService.ts';
+import { PackageScanFindings } from './PackageScanFindings.tsx';
 import { SourceTransparency } from './SourceTransparency.tsx';
 import { describeEvidenceKind, presentAssessment } from './resultMessages.ts';
 
 interface ResultScreenProps {
   readonly result: ProductLookupResult;
+  readonly packageScan: PackageScanApi;
   readonly onScanAgain: () => void;
 }
 
@@ -11,10 +15,14 @@ interface ResultScreenProps {
  * Renders a decision that was already made by the domain layer.
  * This component contains no allergy logic whatsoever.
  */
-export function ResultScreen({ result, onScanAgain }: ResultScreenProps) {
-  const presentation = presentAssessment(result.assessment);
+export function ResultScreen({ result, packageScan, onScanAgain }: ResultScreenProps) {
+  const scans = result.packageScans ?? [];
+  const presentation = presentAssessment(result.assessment, { packageScanCount: scans.length });
   const product = result.product;
   const productTitle = product?.displayName ?? 'מוצר לא מזוהה';
+  // RED is final: there is nothing a photo could add, and offering another step
+  // would only dilute "do not give this to the child".
+  const offerPackageScan = result.assessment.status !== 'danger';
 
   return (
     <div className={`result result--${presentation.tone}`}>
@@ -33,6 +41,16 @@ export function ResultScreen({ result, onScanAgain }: ResultScreenProps) {
           {result.inputError.userMessage}
         </p>
       )}
+
+      {offerPackageScan && (
+        <PackageScanPanel
+          packageScan={packageScan}
+          status={result.assessment.status}
+          hasPreviousScan={scans.length > 0}
+        />
+      )}
+
+      <PackageScanFindings scans={scans} />
 
       {result.assessment.hasConflict && (
         <p className="result__notice">שימו לב: נמצאו הבדלים בין מקורות המידע. התוצאה המחמירה היא שמוצגת.</p>

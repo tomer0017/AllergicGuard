@@ -10,6 +10,7 @@
  */
 
 import { fetchJson } from '../../../../infrastructure/http/httpClient.ts';
+import { isSameBarcode } from '../../../../utils/barcode.ts';
 import { createAppError } from '../../../../domain/errors/appError.ts';
 import type { SourceReliability, SourceType } from '../../../../domain/product/productEvidence.ts';
 import {
@@ -139,8 +140,11 @@ export class OpenFoodFactsProvider implements ProductDataProvider {
 
     // The API echoes the requested code; a mismatch means we would be showing
     // allergen data for a different product, which is never acceptable.
+    // The comparison is GTIN-aware: Open Food Facts stores UPC-A codes
+    // zero-padded to 13 digits, so `037600309417` legitimately comes back as
+    // `0037600309417` — the same article number, not a different product.
     const returnedCode = body.product.code ?? body.code;
-    if (returnedCode && returnedCode !== barcode) {
+    if (returnedCode && !isSameBarcode(returnedCode, barcode)) {
       const error = createAppError(
         'PROVIDER_INVALID_RESPONSE',
         `Barcode mismatch: requested ${barcode}, received ${returnedCode}`,

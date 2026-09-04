@@ -1,33 +1,60 @@
 /**
- * Future extension point: analyzing a photo of the package's allergen panel.
+ * The contract every package-photo analyzer implements.
  *
- * NOT IMPLEMENTED IN THE MVP — this file exists only to fix the contract so a
- * future implementation cannot accidentally weaken the safety model.
+ * Mirrors the ProductDataProvider design: a provider only produces normalized
+ * evidence, it never makes a decision. Adding a Vision provider (a Gemini or
+ * OpenAI proxy, a native ML Kit bridge) means implementing this interface and
+ * routing the recognized text through `analyzePackageText`; no UI, no service
+ * and no safety code changes.
  *
- * CRITICAL RULE
- * -------------
- * Vision/OCR may escalate a product to RED. It must NEVER independently create
- * GREEN. "No peanut detected by the model" is not evidence of absence: the photo
- * may be blurry, cropped, or of the wrong panel.
- *
- * This is enforced structurally rather than by convention: the returned evidence
- * is a ProductEvidence with sourceType 'package_scan', and an implementation may
- * only set `mayContainDataStatus: 'reported'` when it actually read a complete
- * precautionary-labelling statement. Anything less must be 'empty', which the
- * safety engine treats as unknown and therefore refuses to clear.
+ * CRITICAL RULE — see domain/package/packageEvidence.ts for the enforcement:
+ * a provider may escalate to RED, it can never create GREEN.
  */
 
-import type { ProductEvidence } from '../../domain/product/productEvidence.ts';
+import type { AppError } from '../../domain/errors/appError.ts';
+import type { PackageEvidence } from '../../domain/package/packageEvidence.ts';
+import type { Logger } from '../../infrastructure/logging/logger.ts';
 
-export interface PackageAnalysisResult {
-  readonly evidence: ProductEvidence;
-  /** Raw text the OCR produced, for transparency and debugging. */
-  readonly recognizedText?: string;
+export interface PackageAnalysisContext {
+  readonly requestId: string;
+  readonly logger: Logger;
+  readonly signal?: AbortSignal;
+  /** Barcode the photo belongs to, for correlation only. */
+  readonly barcode?: string;
+  /** 0-1 progress from a long-running engine, for the UI. */
+  readonly onProgress?: (progress: number, stage: string) => void;
 }
+
+export interface PackageAnalysisDiagnostics {
+  readonly providerId: string;
+  readonly providerName: string;
+  readonly requestId: string;
+  readonly startedAt: string;
+  readonly completedAt: string;
+  readonly durationMs: number;
+  readonly imageBytes: number;
+  readonly imageType: string;
+  readonly extractedTextLength: number;
+  readonly warnings: readonly string[];
+}
+
+export type PackageAnalysisResult =
+  | {
+      readonly status: 'success';
+      readonly evidence: PackageEvidence;
+      readonly diagnostics: PackageAnalysisDiagnostics;
+    }
+  | {
+      readonly status: 'error';
+      readonly error: AppError;
+      readonly diagnostics: PackageAnalysisDiagnostics;
+    };
 
 export interface PackageAnalysisProvider {
   readonly id: string;
   readonly name: string;
   readonly enabled: boolean;
-  analyze(image: Blob): Promise<PackageAnalysisResult>;
+  /** Shown to the user under "שיטת ניתוח". */
+  readonly analysisMethod: string;
+  analyze(image: Blob, context: PackageAnalysisContext): Promise<PackageAnalysisResult>;
 }

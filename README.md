@@ -84,8 +84,11 @@ in `src/domain/allergy/__tests__/assessAllergenRisk.test.ts`.
 | State | Icon | Headline | Meaning |
 |---|---|---|---|
 | **RED** | ⛔ | נמצא סיכון לבוטנים | Do **not** give the product. |
-| **ORANGE** | ⚠️ | אין מספיק מידע — חייבים לבדוק | Do **not** assume it is safe. Check the package. |
+| **ORANGE** | ⚠️ | אין מספיק מידע — חייבים לבדוק | Do **not** assume it is safe. Offers **📷 צלם את סימון האלרגנים** as the primary next step. |
 | **GREEN** | ✅ | לא נמצא סימון לבוטנים במידע הזמין | No indication found — still verify the label. |
+
+ORANGE is a statement about data coverage, not an application error, and it is
+never a dead end: see [Package photo analysis](#package-photo-analysis-active).
 
 ---
 
@@ -151,10 +154,12 @@ src/
   domain/
     allergy/        AllergenCode, matchers, assessment types, THE SAFETY ENGINE
     errors/         AppError model (code + technical message + Hebrew message)
+    package/        PackageEvidence + the bridge that keeps Vision from clearing
     product/        ProductEvidence, ProductIdentity, SourceConflict
   features/
     scanner/        camera hook, BarcodeDetector/ZXing readers, ScannerPanel
     manual-barcode/ manual entry fallback
+    package-scan/   camera/gallery capture panel for the allergen label
     product-result/ result screen, Hebrew wording, source transparency
     debug/          development-only inspector
   infrastructure/
@@ -162,6 +167,12 @@ src/
     logging/        correlation-id logger with a ring buffer
     cache/          short-TTL evidence cache (localStorage)
   services/
+    package-analysis/
+      packageAnalysisProvider.ts   the OCR/Vision provider contract
+      packageTextAnalysis.ts       pure text -> PackageEvidence rules
+      tesseractOcrProvider.ts      ACTIVE, browser-only, no API key
+      imagePreparation.ts          resize + greyscale + contrast, on-device
+      packageScanService.ts        orchestration + PACKAGE_SCAN logging
     product-data/
       providers/
         openFoodFacts/   ACTIVE
@@ -291,8 +302,12 @@ reconstructable from the console:
 [ASSESSMENT][abc123] status: insufficient_data { reasonCode: 'MAY_CONTAIN_DATA_MISSING' }
 ```
 
+A package photo continues the same correlation id — see
+[Developer logging](#developer-logging) under package photo analysis.
+
 The **debug panel** (request id, provider table, HTTP status, timings, fields
-present/missing, evidence, conflicts, decision + reason, log tail) is imported
+present/missing, package scans with recognized text and before/after status,
+evidence, conflicts, decision + reason, log tail) is imported
 behind `import.meta.env.DEV`, so it is dropped from production bundles entirely —
 verified by grepping `dist/`.
 
@@ -314,7 +329,7 @@ responses, so allergen data is never served stale.
 ## Tests
 
 ```bash
-npm test     # 112 tests, no network access
+npm test     # 184 tests, no network access
 ```
 
 Coverage focuses on what can hurt a child:
@@ -330,13 +345,41 @@ Coverage focuses on what can hurt a child:
 * **Lookup service** — all providers queried, disabled providers skipped,
   RED preserved against a silent source, identity conflict → ORANGE, a throwing
   provider → ORANGE, identity-only → never GREEN.
+* **Package photo analysis** — every mandated escalation phrase in Hebrew and
+  English, precautionary vs. contains classification, front-of-pack product
+  names, OCR error tolerance, and the "free from" cases that must NOT escalate.
+* **The Vision invariant** — a photo can never produce GREEN, asserted both
+  against the real safety engine and against the literals in the bridge source.
+* **Merging** — every combination of barcode verdict × photo finding
+  (ORANGE+peanut → RED, ORANGE+nothing → ORANGE, GREEN+peanut → RED,
+  RED+nothing → RED, and a later empty photo never cancelling an earlier find).
 * **Aggregator, matchers, HTTP layer, cache, barcode validation.**
 
 Unit tests never touch the live API. For real-world checks use the dev tool:
 
 ```bash
 npm run check:barcode -- 7290000066318 7290004131074 0000000000000
+
+# The real-world regression set from field testing in Israel:
+npm run check:barcode -- 7290000446547 037600309417 7290000074184
 ```
+
+Expected today (September 2026):
+
+| Barcode | Product | Barcode-only result |
+| --- | --- | --- |
+| `7290000446547` | B&D natural peanut butter | RED — `CONTAINS_DECLARED` |
+| `037600309417` | Skippy peanut butter | RED — `CONTAINS_DECLARED` |
+| `7290000074184` | Osem Petit Beurre | ORANGE — `ALLERGEN_DATA_MISSING` |
+
+The Skippy case used to be ORANGE: Open Food Facts stores 12-digit UPC-A codes
+zero-padded to 13 digits, and the provider's barcode-echo guard read that as a
+different product. `isSameBarcode` now compares GTINs, not strings.
+
+The Osem case is genuine missing data and stays ORANGE — that is the case the
+package photo exists for. To exercise it by hand, scan `7290000074184`, tap
+**צלם את סימון האלרגנים**, and photograph a label; the debug panel shows the
+recognized text, the detected terms and the before/after status.
 
 It prints the barcode, whether the product was found, name, provider, whether
 ingredients/allergens/traces were available, the raw relevant fields, the
@@ -369,6 +412,144 @@ proxy — anything in this repo ships to the browser.
 
 ---
 
+## Package photo analysis (ACTIVE)
+
+When the databases cannot answer, the package itself can. ORANGE is no longer a
+dead end: it offers **📷 צלם את סימון האלרגנים**.
+
+```
+barcode → providers → assessment
+   RED   → shown as RED, nothing more to ask
+   GREEN → shown as GREEN, photo offered as an optional double-check
+   ORANGE→ photo capture offered as the primary action
+              ↓
+      photo → OCR → PackageEvidence → re-assessed with the barcode evidence
+              ↓
+      explicit peanut wording → RED      no wording found → still ORANGE
+```
+
+### THE VISION SAFETY RULE
+
+**A photo may escalate to RED. A photo may NEVER create GREEN.**
+
+This is structural, not a convention someone has to remember.
+`domain/package/packageEvidence.ts` holds the only bridge from image analysis
+into the safety engine, and it hard-codes
+
+```ts
+allergenDataStatus:   'empty',
+mayContainDataStatus: 'empty',
+```
+
+as literals with no parameter and no caller able to change them. The engine
+treats `'empty'` as *unknown*, so a `package_scan` source can never reach the
+clearing branch of `assessAllergenRisk` — while positive findings still land in
+`containsAllergens` / `mayContainAllergens` / `ingredientsText`, all of which the
+engine reads as danger. `packageEvidence.test.ts` asserts both the behaviour and
+the literals in the source text.
+
+Consequences, all covered by tests:
+
+| Situation | Result |
+| --- | --- |
+| Photo reads `מכיל בוטנים` / `Peanut Butter` / `arachis hypogaea` | RED |
+| Photo reads `עלול להכיל בוטנים` / `may contain peanuts` | RED |
+| Photo reads nothing / is blurry / analysis crashes | unchanged (ORANGE stays ORANGE) |
+| Photo reads `ללא בוטנים` | unchanged — a photographed claim is not a verified record |
+| Barcode was GREEN, photo finds peanuts | RED, with a conflict flag |
+| Barcode was RED, photo finds nothing | RED |
+| A second, emptier photo after a peanut finding | still RED — findings are appended, never replaced |
+
+### Why browser-side OCR and not a cloud Vision API
+
+Options evaluated for a static GitHub Pages app:
+
+| Option | Hebrew | Key needed | Backend | Verdict |
+| --- | --- | --- | --- | --- |
+| **Tesseract.js (WASM)** | ~92-96% on clean print | none | none | **chosen** |
+| Gemini / OpenAI Vision | excellent | yes | yes — a secret cannot ship in a Vite bundle | rejected for the MVP |
+| Cloud OCR (Google/Azure) | very good | yes | yes | rejected for the MVP |
+| `TextDetector` (Shape Detection API) | n/a | none | none | rejected: effectively unshipped |
+
+The deciding argument is the shape of the task. This is **keyword detection on a
+label**, not document understanding: the app must recognize a handful of peanut
+spellings. Tesseract is good enough for that, and the failure mode is aligned
+with the safety model — every OCR miss degrades to ORANGE ("check the package"),
+never to a false GREEN. A paid API would buy accuracy that mostly converts
+ORANGE into ORANGE, at the cost of a serverless proxy, a billable key, and
+sending photos of a customer's shopping to a third party.
+
+**No backend or serverless proxy was introduced.** The photo never leaves the
+device. Nothing in `appConfig` holds a credential, and nothing may.
+
+Engine assets (WASM core ~4 MB, `heb` ~0.6 MB, `eng` ~3 MB) come from the
+jsDelivr CDN **on first use only** and are cached by Tesseract.js in IndexedDB.
+The library is behind a dynamic `import()`, so a user who never photographs a
+package downloads none of it — the main bundle is unchanged. Point
+`VITE_PACKAGE_SCAN_CORE_PATH` / `VITE_PACKAGE_SCAN_LANG_PATH` at a self-hosted
+mirror if the CDN is unacceptable.
+
+### How the text is interpreted
+
+`packageTextAnalysis.ts` is a pure function, so every provider gets identical
+rules. It analyzes **one label segment at a time** rather than the whole blob: a
+label reading `ללא גלוטן. מכיל בוטנים.` must not have its `ללא` attached to the
+wrong allergen. Findings are then written into declaration lists, which the
+engine matches without negation, so a finding cannot be lost downstream.
+
+Three matching passes, in order:
+
+1. **Strict** — the shared `PEANUT_MATCHER`, with its own negation handling.
+2. **Latin look-alike correction** — `PEANU7 8UTTER` → `peanut butter`.
+3. **Distance-1 fuzzy** — `בוטנימ` → `בוטנים`, English `peanut(s)`.
+
+Passes 2 and 3 never run inside a segment that declares the allergen's absence,
+so a misread `ללא בוטנים` cannot become a warning. Any finding that needed
+correction is flagged `viaOcrCorrection` and labelled as such in the UI.
+
+Image quality (`good` / `partial` / `poor`) is derived from recognized text
+length and OCR confidence. It **only** changes how loudly the app says that
+finding nothing proves nothing — it never suppresses a finding. A blurry photo
+that still reads `PEANUT` is RED.
+
+### Source transparency
+
+A photo-driven result never pretends to be manufacturer data. The result screen
+shows the exact text that was read:
+
+```
+מקור הסיכון: צילום האריזה
+נמצא בצילום האריזה: "מכיל: בוטנים, סויה."
+מקור: צילום האריזה   שיטת ניתוח: OCR בדפדפן (Tesseract.js)
+```
+
+### Adding a Vision provider later
+
+Implement `PackageAnalysisProvider`, route the recognized text through
+`analyzePackageText`, and register it in `appServices.ts`. Nothing else changes,
+and the safety rule holds automatically because the bridge is the only way in.
+If that provider needs a credential it needs a minimal serverless proxy
+(Cloudflare Worker / Vercel function) holding the key as an environment secret —
+the browser may only ever see a proxy URL.
+
+### Developer logging
+
+Every scan is logged under the `PACKAGE_SCAN` stage with the barcode scan's
+correlation id, then the merge under `ASSESSMENT`:
+
+```
+[PACKAGE_SCAN][abc123] image selected            { imageBytes, imageType }
+[PACKAGE_SCAN][abc123] analysis started          { providerId, analysisMethod }
+[PACKAGE_SCAN][abc123] image prepared            { original, prepared }
+[PACKAGE_SCAN][abc123] text extracted            { durationMs, extractedTextLength, textConfidence, imageQuality }
+[PACKAGE_SCAN][abc123] peanut evidence detected: true { detectedTerms, containsStatements, mayContainStatements }
+[ASSESSMENT][abc123]   package scan merged: insufficient_data -> danger { escalated: true }
+```
+
+The image itself and the recognized text are **never** logged — only lengths,
+matched terms and counts. Full text lives in the development debug panel, which
+cannot reach a production bundle.
+
 ## Known limitations
 
 * **Coverage.** Open Food Facts is crowdsourced; many Israeli products are
@@ -384,21 +565,14 @@ proxy — anything in this repo ships to the browser.
 * **The camera needs HTTPS or localhost**, and older browsers fall back to
   ZXing, which is slower on low-end phones. Manual entry always works.
 * **The tool checks peanuts only.** Other allergens are modeled but not surfaced.
+* **OCR is not a reader of intent.** Tesseract reads clean printed labels well
+  and struggles with curved foil, low contrast, glare and stylised type. Every
+  such failure lands on ORANGE, so it costs a retake, never a wrong clearance.
+* **Photo analysis needs one CDN fetch.** The first scan on a device downloads
+  the engine (~8 MB, then cached in IndexedDB). Offline, the barcode path still
+  works and the photo option reports that analysis is unavailable.
 
 ## Roadmap
-
-### Future: package photo / Vision (OCR)
-
-`src/services/package-analysis/packageAnalysisProvider.ts` defines the interface.
-
-```
-photo of the ingredients/allergen panel → Vision/OCR → structured allergen evidence
-```
-
-**CRITICAL RULE, already encoded in the type:** vision evidence may escalate a
-product to RED, but must never independently create GREEN. "No peanut detected
-by AI" is not evidence of absence — a `package_scan` source must report
-`mayContainDataStatus: 'empty'` unless it actually read a full allergen panel.
 
 ### Future: GS1 Israel integration
 

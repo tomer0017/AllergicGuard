@@ -31,10 +31,12 @@ export function SourceTransparency({ evidence, providerResults }: SourceTranspar
 
       {evidence.length === 0 && <p className="sources__empty">אף מקור מידע לא החזיר מידע על המוצר.</p>}
 
-      {evidence.map((item) => {
+      {evidence.map((item, index) => {
         const updated = formatDate(item.lastUpdated);
         return (
-          <div className="sources__card" key={item.providerId}>
+          // A product can carry several package-scan entries from the same
+          // provider, so the index is part of the key.
+          <div className="sources__card" key={`${item.providerId}-${index}`}>
             <dl className="sources__list">
               <dt>מקור</dt>
               <dd>{item.providerName}</dd>

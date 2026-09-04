@@ -57,6 +57,20 @@ export interface AppConfig {
     /** Ignore repeats of the same barcode for this long. */
     readonly duplicateScanCooldownMs: number;
   };
+
+  /**
+   * Package-photo analysis. Browser-only by design: no API key exists in this
+   * object because none may exist in a static build. A future hosted Vision
+   * provider must be reached through a proxy URL, never a credential.
+   */
+  readonly packageAnalysis: {
+    readonly enabled: boolean;
+    /** Tesseract language codes. Hebrew first: Israeli labels are the target. */
+    readonly languages: string;
+    /** Optional self-hosted mirrors for the WASM core / language data. */
+    readonly corePath?: string;
+    readonly langPath?: string;
+  };
 }
 
 const isDevelopment = env.DEV === true || env.DEV === 'true';
@@ -98,5 +112,13 @@ export const appConfig: AppConfig = {
 
   scanner: {
     duplicateScanCooldownMs: readNumber('VITE_SCAN_COOLDOWN_MS', 3000),
+  },
+
+  packageAnalysis: {
+    enabled: readBoolean('VITE_ENABLE_PACKAGE_SCAN', true),
+    languages: readString('VITE_PACKAGE_SCAN_LANGUAGES', 'heb+eng'),
+    // Empty means "use the library's jsDelivr default".
+    corePath: readString('VITE_PACKAGE_SCAN_CORE_PATH', '') || undefined,
+    langPath: readString('VITE_PACKAGE_SCAN_LANG_PATH', '') || undefined,
   },
 };

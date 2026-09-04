@@ -127,6 +127,43 @@ describe('OpenFoodFactsProvider', () => {
     if (result.status === 'error') expect(result.error.code).toBe('PROVIDER_INVALID_RESPONSE');
   });
 
+  it('accepts the zero-padded EAN-13 form of a 12-digit UPC', async () => {
+    // Real case: Skippy peanut butter. Open Food Facts stores UPC-A codes
+    // padded to 13 digits, and treating that as a different product used to
+    // discard allergen data we actually had.
+    const upc = '037600309417';
+    const padded = '0037600309417';
+    const result = await makeProvider(
+      jsonResponse({
+        code: padded,
+        status: 1,
+        product: {
+          code: padded,
+          product_name: 'Skippy Peanut Butter',
+          allergens_tags: ['en:peanuts'],
+          traces_tags: [],
+        },
+      }),
+    ).lookupByBarcode(upc, makeContext());
+
+    expect(result.status).toBe('success');
+    if (result.status !== 'success') return;
+    expect(assessPeanutRisk({ evidence: [result.evidence] }).status).toBe('danger');
+  });
+
+  it('still rejects a response for a genuinely different product', async () => {
+    const result = await makeProvider(
+      jsonResponse({
+        code: '7290000446547',
+        status: 1,
+        product: { code: '7290000446547', product_name: 'Something else' },
+      }),
+    ).lookupByBarcode(BARCODE, makeContext());
+
+    expect(result.status).toBe('error');
+    if (result.status === 'error') expect(result.error.code).toBe('PROVIDER_INVALID_RESPONSE');
+  });
+
   it('reports an error on schema mismatch', async () => {
     const result = await makeProvider(jsonResponse({ unexpected: true })).lookupByBarcode(
       BARCODE,

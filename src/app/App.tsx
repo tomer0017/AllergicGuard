@@ -83,7 +83,11 @@ export default function App() {
         )}
 
         {scan.screen === 'result' && scan.result && (
-          <ResultScreen result={scan.result} onScanAgain={handleScanAgain} />
+          <ResultScreen
+            result={scan.result}
+            packageScan={scan.packageScan}
+            onScanAgain={handleScanAgain}
+          />
         )}
       </main>
 

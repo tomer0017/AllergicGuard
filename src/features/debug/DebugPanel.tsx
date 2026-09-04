@@ -76,6 +76,46 @@ export function DebugPanel({ result, logs }: DebugPanelProps) {
                 </p>
               ))}
 
+              <h4>Package scans ({result.packageScans?.length ?? 0})</h4>
+              {(result.packageScans ?? []).length === 0 && <p>no package photo analyzed</p>}
+              {(result.packageScans ?? []).map((scan) => (
+                <div key={scan.scanId}>
+                  <p>
+                    provider: <code>{scan.providerId}</code> · method:{' '}
+                    <code>{scan.analysisMethod}</code> · duration:{' '}
+                    <code>{scan.packageEvidence.durationMs}ms</code>
+                  </p>
+                  <p>
+                    image quality: <code>{scan.packageEvidence.imageQuality}</code> · confidence:{' '}
+                    <code>{scan.packageEvidence.textConfidence?.toFixed(1) ?? '—'}</code> · text length:{' '}
+                    <code>{scan.packageEvidence.extractedText.length}</code>
+                  </p>
+                  <p>
+                    detected terms:{' '}
+                    <code>{scan.packageEvidence.detectedProductTerms.join(', ') || '—'}</code>
+                  </p>
+                  <p>
+                    contains evidence:{' '}
+                    <code>{scan.packageEvidence.containsAllergens.join(' | ') || '—'}</code>
+                  </p>
+                  <p>
+                    may-contain evidence:{' '}
+                    <code>{scan.packageEvidence.mayContainAllergens.join(' | ') || '—'}</code>
+                  </p>
+                  <p>
+                    warnings: <code>{scan.packageEvidence.warnings.join(' | ') || '—'}</code>
+                  </p>
+                  <p>
+                    previous: <code>{scan.previousStatus}</code> /{' '}
+                    <code>{scan.previousReasonCode}</code> → merged:{' '}
+                    <code>{scan.newStatus}</code> / <code>{scan.newReasonCode}</code> · escalated:{' '}
+                    <code>{String(scan.escalated)}</code>
+                  </p>
+                  <p>Extracted text</p>
+                  <pre className="debug__pre">{scan.packageEvidence.extractedText || '(none)'}</pre>
+                </div>
+              ))}
+
               <h4>Evidence</h4>
               <pre className="debug__pre">{JSON.stringify(result.evidence, null, 2)}</pre>
 

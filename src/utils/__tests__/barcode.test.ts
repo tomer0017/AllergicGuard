@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { hasValidCheckDigit, normalizeBarcode, validateBarcode } from '../barcode.ts';
+import {
+  hasValidCheckDigit,
+  isSameBarcode,
+  normalizeBarcode,
+  toComparableBarcode,
+  validateBarcode,
+} from '../barcode.ts';
 
 describe('barcode validation', () => {
   it('accepts real EAN-13 barcodes', () => {
@@ -28,5 +34,27 @@ describe('barcode validation', () => {
   it('strips separators scanners sometimes emit', () => {
     expect(normalizeBarcode(' 729-0000 066318 ')).toBe('7290000066318');
     expect(validateBarcode(' 729-0000 066318 ').valid).toBe(true);
+  });
+});
+
+describe('toComparableBarcode / isSameBarcode', () => {
+  it('treats a UPC-A and its zero-padded EAN-13 form as the same article', () => {
+    // The real Skippy case: Open Food Facts stores 037600309417 as
+    // 0037600309417, and rejecting that lost a product we actually had data for.
+    expect(isSameBarcode('037600309417', '0037600309417')).toBe(true);
+    expect(isSameBarcode('37600309417', '0037600309417')).toBe(true);
+  });
+
+  it('still rejects genuinely different products', () => {
+    expect(isSameBarcode('7290000074184', '7290000446547')).toBe(false);
+    expect(isSameBarcode('037600309417', '037600309418')).toBe(false);
+  });
+
+  it('ignores separators the scanner may emit', () => {
+    expect(isSameBarcode('729-0000-074184', '7290000074184')).toBe(true);
+  });
+
+  it('normalizes an all-zero code without emptying it', () => {
+    expect(toComparableBarcode('0000')).toBe('0');
   });
 });

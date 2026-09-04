@@ -21,6 +21,9 @@ export type AppErrorCode =
   | 'PROVIDER_DISABLED'
   | 'PROVIDER_NOT_IMPLEMENTED'
   | 'ALLERGEN_DATA_MISSING'
+  | 'PACKAGE_ANALYSIS_UNAVAILABLE'
+  | 'PACKAGE_ANALYSIS_FAILED'
+  | 'PACKAGE_IMAGE_UNREADABLE'
   | 'UNKNOWN_ERROR';
 
 export interface AppError {
@@ -48,6 +51,9 @@ const DEFAULT_USER_MESSAGES: Record<AppErrorCode, string> = {
   PROVIDER_DISABLED: 'מקור המידע אינו פעיל.',
   PROVIDER_NOT_IMPLEMENTED: 'מקור המידע עדיין אינו זמין.',
   ALLERGEN_DATA_MISSING: 'לא נמצא מידע על אלרגנים עבור המוצר.',
+  PACKAGE_ANALYSIS_UNAVAILABLE: 'ניתוח צילום האריזה אינו זמין כרגע. יש לבדוק את הסימון על האריזה.',
+  PACKAGE_ANALYSIS_FAILED: 'לא הצלחנו לנתח את התמונה. יש לבדוק את סימון האלרגנים על האריזה.',
+  PACKAGE_IMAGE_UNREADABLE: 'לא הצלחנו לקרוא את הסימון בצורה ברורה. נסו לצלם שוב מקרוב ובאור טוב.',
   UNKNOWN_ERROR: 'אירעה שגיאה בלתי צפויה. יש לבדוק את סימון האלרגנים על האריזה.',
 };
 

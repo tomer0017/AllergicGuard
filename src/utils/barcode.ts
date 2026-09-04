@@ -50,6 +50,27 @@ export function validateBarcode(input: string): BarcodeValidation {
   return { valid: true, barcode, format };
 }
 
+/**
+ * Canonical form for COMPARING two barcodes.
+ *
+ * GS1 numbers are the same number whether they are written as UPC-A (12
+ * digits), EAN-13 (13) or GTIN-14 — the shorter forms are just the longer one
+ * with leading zeros dropped. Open Food Facts stores the zero-padded form, so
+ * a request for the Skippy UPC `037600309417` comes back as `0037600309417`.
+ *
+ * Only ever use this to decide "is this the same product?". Never use it as the
+ * lookup key or for display: it is lossy about the original encoding.
+ */
+export function toComparableBarcode(input: string): string {
+  const digits = normalizeBarcode(input).replace(/^0+/, '');
+  return digits.length > 0 ? digits : '0';
+}
+
+/** True when two barcodes denote the same GS1 article number. */
+export function isSameBarcode(a: string, b: string): boolean {
+  return toComparableBarcode(a) === toComparableBarcode(b);
+}
+
 /** Israeli GS1 prefix — used only for display hints, never for safety decisions. */
 export function isIsraeliPrefix(barcode: string): boolean {
   return barcode.startsWith('729');

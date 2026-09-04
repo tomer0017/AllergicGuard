@@ -42,8 +42,17 @@ const REASON_TEXT: Record<AssessmentReasonCode, string> = {
 const GREEN_DISCLAIMER =
   'זו אינה הצהרה שהמוצר בטוח. במקרה של אלרגיה מסכנת חיים יש לבדוק גם את סימון האלרגנים שעל האריזה.';
 
-export function presentAssessment(assessment: AllergyAssessment): ResultPresentation {
+export interface PresentationContext {
+  /** How many package photos have already been folded into this result. */
+  readonly packageScanCount?: number;
+}
+
+export function presentAssessment(
+  assessment: AllergyAssessment,
+  context: PresentationContext = {},
+): ResultPresentation {
   const explanation = REASON_TEXT[assessment.reasonCode];
+  const photographed = (context.packageScanCount ?? 0) > 0;
 
   switch (assessment.status) {
     case 'danger':
@@ -59,8 +68,14 @@ export function presentAssessment(assessment: AllergyAssessment): ResultPresenta
         tone: 'orange',
         icon: '⚠️',
         headline: 'אין מספיק מידע — חייבים לבדוק',
-        explanation,
-        action: 'אין להניח שהמוצר בטוח. יש לבדוק את סימון האלרגנים שעל האריזה.',
+        // ORANGE is a data-coverage answer, not an application error. It says
+        // what is missing and offers the photo as the next concrete step.
+        explanation: photographed
+          ? `${explanation} גם בצילום האריזה לא נמצא סימון ברור.`
+          : explanation,
+        action: photographed
+          ? 'אין להניח שהמוצר בטוח. יש לקרוא את סימון האלרגנים שעל האריזה, או לצלם שוב מקרוב ובאור טוב.'
+          : 'אין להניח שהמוצר בטוח. צלמו את סימון האלרגנים, או בדקו אותו ידנית על האריזה.',
       };
     case 'no_known_risk':
       return {
