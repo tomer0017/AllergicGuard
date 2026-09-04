@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Edit",
+      "Write",
+      "Bash",
+       "Bash(timeout 15 npm ping)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(node -e \"import\\('gifenc'\\).then\\(m => console.log\\('exports:', Object.keys\\(m\\)\\)\\)\")",
+      "Bash(node -e \"import\\('gifenc'\\).then\\(m => console.log\\('default keys:', Object.keys\\(m.default\\)\\)\\)\")",
+      "Bash(node --input-type=module -e \"import { GIFEncoder, quantize, applyPalette } from 'gifenc'; console.log\\(typeof GIFEncoder, typeof quantize, typeof applyPalette\\)\")",
+      "Bash(node -e \"const p=require\\('./node_modules/gifenc/package.json'\\); console.log\\(JSON.stringify\\({main:p.main,module:p.module,exports:p.exports},null,1\\)\\)\")"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(sudo *)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean -fd*)",
+      "Bash(git clean -fdx*)",
+      "Bash(git push --force*)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./**/.env)",
+      "Read(./**/.env.*)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  }
+}
