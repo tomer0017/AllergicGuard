@@ -11,7 +11,10 @@ export function registerServiceWorker(): void {
   if (!('serviceWorker' in navigator)) return;
 
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {
+    // BASE_URL is '/' locally and '/AllergicGuard/' on GitHub Pages, so both the
+    // worker script and its scope follow wherever the app is deployed.
+    const base = import.meta.env.BASE_URL;
+    navigator.serviceWorker.register(`${base}sw.js`, { scope: base }).catch(() => {
       // Offline app-shell caching is an optimization; failing to register it
       // must never break the scanner.
     });

@@ -7,7 +7,12 @@
  */
 
 const CACHE_NAME = 'allergicguard-shell-v1';
-const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest'];
+
+// The app may be hosted under a sub-path (GitHub Pages), so every shell URL is
+// resolved against the directory this worker was served from.
+const BASE = new URL('./', self.location.href).href;
+const INDEX_URL = `${BASE}index.html`;
+const APP_SHELL = [BASE, INDEX_URL, `${BASE}manifest.webmanifest`];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).catch(() => undefined));
@@ -38,6 +43,6 @@ self.addEventListener('fetch', (event) => {
         caches.open(CACHE_NAME).then((cache) => cache.put(request, copy)).catch(() => undefined);
         return response;
       })
-      .catch(() => caches.match(request).then((cached) => cached ?? caches.match('/index.html'))),
+      .catch(() => caches.match(request).then((cached) => cached ?? caches.match(INDEX_URL))),
   );
 });
