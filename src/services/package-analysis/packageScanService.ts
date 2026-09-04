@@ -5,6 +5,21 @@
  * It makes no safety decision. Merging the evidence into a result is
  * ProductLookupService.applyPackageEvidence's job, and the verdict is always
  * the pure safety engine's.
+ *
+ * PROVIDER ESCALATION
+ * -------------------
+ * Providers are tried in order, and the chain STOPS as soon as one produces a
+ * usable answer:
+ *
+ *   1. explicit peanut wording found → stop. Nothing a second provider says
+ *      could make the result safer, so there is no reason to pay for it.
+ *   2. a good-quality read that found nothing → stop. We read the label; the
+ *      result stays ORANGE because a photo can never clear a product.
+ *   3. a poor or partial read → try the next provider, which is the only case
+ *      where a remote model earns its cost, its latency and its privacy price.
+ *
+ * The BEST attempt is returned (an escalating provider beats a better-quality
+ * empty read), and every attempt is kept for the debug panel.
  */
 
 import { createAppError, toAppError, type AppError } from '../../domain/errors/appError.ts';
@@ -54,6 +69,10 @@ export class PackageScanService {
     return this.providers.find((provider) => provider.enabled);
   }
 
+  enabledProviders(): readonly PackageAnalysisProvider[] {
+    return this.providers.filter((provider) => provider.enabled);
+  }
+
   async analyze(image: Blob, request: PackageScanRequest): Promise<PackageScanOutcome> {
     const { requestId } = request;
     const provider = this.activeProvider();
@@ -95,6 +114,37 @@ export class PackageScanService {
       };
     }
 
+    const providers = this.enabledProviders();
+    let lastError: PackageScanOutcome | undefined;
+    let bestEmptyRead: PackageScanOutcome | undefined;
+
+    for (const candidate of providers) {
+      const outcome = await this.runProvider(candidate, image, request);
+
+      if (outcome.status === 'error') {
+        lastError = outcome;
+        continue;
+      }
+      // Explicit danger: stop immediately, nothing later can improve on it.
+      if (outcome.evidence.explicitPeanutEvidence) return outcome;
+      // A good read that found nothing is a complete answer too.
+      if (outcome.evidence.imageQuality === 'good') return outcome;
+      // Poor/partial: remember it, but let the next provider try.
+      bestEmptyRead ??= outcome;
+    }
+
+    return bestEmptyRead ?? lastError ?? {
+      status: 'error',
+      error: createAppError('PACKAGE_ANALYSIS_FAILED', 'No package analysis provider produced a result'),
+    };
+  }
+
+  private async runProvider(
+    provider: PackageAnalysisProvider,
+    image: Blob,
+    request: PackageScanRequest,
+  ): Promise<PackageScanOutcome> {
+    const { requestId } = request;
     this.logger.info('PACKAGE_SCAN', 'analysis started', {
       requestId,
       providerId: provider.id,
@@ -123,7 +173,7 @@ export class PackageScanService {
       }
 
       const evidence = result.evidence;
-      this.logger.info('PACKAGE_SCAN', 'text extracted', {
+      this.logger.info('OCR', 'text extracted', {
         requestId,
         providerId: provider.id,
         durationMs: result.diagnostics.durationMs,
@@ -133,10 +183,15 @@ export class PackageScanService {
         textConfidence: evidence.textConfidence,
         imageQuality: evidence.imageQuality,
       });
-      this.logger.info('PACKAGE_SCAN', `peanut evidence detected: ${evidence.explicitPeanutEvidence}`, {
+      this.logger.info('QUALITY', `image quality: ${evidence.imageQuality}`, {
         requestId,
         providerId: provider.id,
-        detectedTerms: evidence.detectedProductTerms,
+        ...evidence.confidenceMetadata,
+      });
+      this.logger.info('ALLERGEN', `peanut evidence detected: ${evidence.explicitPeanutEvidence}`, {
+        requestId,
+        providerId: provider.id,
+        detectedTerms: evidence.detectedPeanutTerms,
         containsStatements: evidence.containsAllergens.length,
         mayContainStatements: evidence.mayContainAllergens.length,
         warnings: evidence.warnings,

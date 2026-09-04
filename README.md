@@ -90,6 +90,45 @@ in `src/domain/allergy/__tests__/assessAllergenRisk.test.ts`.
 ORANGE is a statement about data coverage, not an application error, and it is
 never a dead end: see [Package photo analysis](#package-photo-analysis-active).
 
+## The flow
+
+```
+OPEN APP
+   ↓
+SCAN BARCODE  (or type it)
+   ↓
+CONFIRM       "האם זה המוצר שסרקת?"   ← barcode ↔ package, nothing more
+   ↓                └─ "לא" → lookup discarded, scanner reopens
+RESULT        identity + verdict + one action, in the first viewport
+   ↓
+if ORANGE:  📷 photo → analysis starts automatically
+   ↓
+RED or ORANGE   (never GREEN from a photo)
+   ↓
+if the label could not be read: retake, with specific guidance
+```
+
+### Why confirmation exists
+
+A scanner can misread a digit, and on a packed shelf it can pick up the
+neighbouring box. Showing an allergen verdict for the wrong product is the
+worst thing this app could do, so the user sees the product image, name, brand
+and barcode and answers one question before any verdict appears.
+
+**Confirming approves the BARCODE ↔ PACKAGE match and nothing else.** It is not
+an approval that the product is safe, it never influences the verdict (which is
+already computed), and it is not persisted anywhere — no login, no database,
+component state for this session only. Answering "לא" discards the lookup
+entirely, because allergen data for the wrong product is worse than none.
+
+### Results-first layout
+
+The target user is kindergarten staff, often holding a child. The first
+viewport carries **identity → verdict → the one action to take**, in that
+order. Provider names, reliability grades, timestamps, missing fields, evidence
+lists and conflicts live below, inside a collapsed `מידע נוסף`. Nothing
+technical may appear above the verdict.
+
 ---
 
 ## Setup
@@ -159,7 +198,8 @@ src/
   features/
     scanner/        camera hook, BarcodeDetector/ZXing readers, ScannerPanel
     manual-barcode/ manual entry fallback
-    package-scan/   camera/gallery capture panel for the allergen label
+    package-scan/   camera/gallery capture, auto-analysis, retake guidance
+    product-confirm/ "is this the product you scanned?" step
     product-result/ result screen, Hebrew wording, source transparency
     debug/          development-only inspector
   infrastructure/
@@ -171,11 +211,13 @@ src/
       packageAnalysisProvider.ts   the OCR/Vision provider contract
       packageTextAnalysis.ts       pure text -> PackageEvidence rules
       tesseractOcrProvider.ts      ACTIVE, browser-only, no API key
-      imagePreparation.ts          resize + greyscale + contrast, on-device
+      remoteVisionProvider.ts      prepared, disabled, proxy-only
+      imagePreparation.ts          resize + greyscale + contrast + focus score
       packageScanService.ts        orchestration + PACKAGE_SCAN logging
     product-data/
       providers/
         openFoodFacts/   ACTIVE
+        fatSecret/       prepared, disabled (Premier + OAuth proxy)
         gs1Israel/       prepared, disabled
         israelRetail/    prepared, disabled
       providerRegistry.ts
@@ -184,7 +226,8 @@ src/
       productLookupService.ts
   testing/          shared test fixtures
   utils/            barcode normalization + GS1 check digit
-scripts/            check:barcode dev tool
+docs/               research notes
+scripts/            check:barcode + benchmark dev tools
 ```
 
 ### Scanner architecture
@@ -296,6 +339,8 @@ reconstructable from the console:
 ```
 [SCAN][abc123] barcode detected              { barcode: '7290000066318', format: 'EAN_13' }
 [LOOKUP][abc123] lookup started              { enabledProviders: ['open-food-facts'] }
+[PRODUCT][abc123] lookup completed, awaiting confirmation { productName: '…' }
+[CONFIRM][abc123] user confirmed the product
 [PROVIDER][abc123][open-food-facts] lookup started
 [PROVIDER][abc123][open-food-facts] product found
 [PROVIDER][abc123][open-food-facts] allergen fields  { allergensStatus: 'reported', tracesStatus: 'empty' }
@@ -329,7 +374,7 @@ responses, so allergen data is never served stale.
 ## Tests
 
 ```bash
-npm test     # 184 tests, no network access
+npm test     # 238 tests, no network access
 ```
 
 Coverage focuses on what can hurt a child:
@@ -353,6 +398,20 @@ Coverage focuses on what can hurt a child:
 * **Merging** — every combination of barcode verdict × photo finding
   (ORANGE+peanut → RED, ORANGE+nothing → ORANGE, GREEN+peanut → RED,
   RED+nothing → RED, and a later empty photo never cancelling an earlier find).
+* **Scan session** — jsdom + Testing Library over `useProductScan`: the verdict
+  is withheld until confirmation, rejection discards the lookup, a photo starts
+  analysis by itself, a bad photo asks for a retake, a good one does not, a
+  failed analysis leaves the verdict untouched, and photo state resets between
+  products.
+* **Quality gate** — every POOR and PARTIAL trigger, plus the contract that it
+  never suppresses a peanut finding.
+* **Focus scoring** — sharp vs. blurred vs. featureless buffers, and the
+  fail-safe that an unmeasurable image is never called sharp.
+* **Provider escalation** — stops on explicit danger, stops on a good empty
+  read, escalates only on a poor/partial read, survives a broken provider, and
+  reports an error rather than empty evidence when all of them fail.
+* **Remote Vision** — disabled without a proxy, sends no credential, runs proxy
+  text through the same rules, and cannot clear a product whatever it returns.
 * **Aggregator, matchers, HTTP layer, cache, barcode validation.**
 
 Unit tests never touch the live API. For real-world checks use the dev tool:
@@ -386,6 +445,74 @@ ingredients/allergens/traces were available, the raw relevant fields, the
 normalized evidence, conflicts, and the final assessment with its reason.
 
 ---
+
+## Data providers
+
+Researched September 2026 — see [`docs/research-2026-09.md`](docs/research-2026-09.md)
+for the measurements and the full reasoning.
+
+| Provider | State | Why |
+| --- | --- | --- |
+| **Open Food Facts** | **ACTIVE** | The only source that answers with no credential. Good Israeli identity coverage (Hebrew names, images); allergen coverage is roughly a coin flip. |
+| FatSecret Platform | adapter prepared, **disabled** | Barcode lookup is Premier-only, allergen access is granted separately again, and OAuth secrets cannot ship in a static build. |
+| Edamam Food Database | **rejected**, no adapter | Keys travel as query parameters (published by a browser build), and its ~700k UPC catalogue is US/UK-centric with no documented Israeli coverage. |
+| GS1 Israel | skeleton, **disabled** | No free, publicly documented API exists. The skeleton deliberately contains no URL. |
+| Israeli retail transparency | skeleton, **disabled** | Excellent Hebrew identity, **zero** allergen data. Permanently `providesAllergenEvidence: false`. |
+| Manufacturer pages / web search | **not built** | Fragile HTML with no GTIN in the markup; would need a backend. Recorded as a RED-only future source: it could escalate, never clear. |
+
+**No second provider was enabled**, because none offers accessible allergen
+coverage for Israeli products today. Adding one to raise the provider count
+would be theatre. The measured coverage gap is real, and the package photo is
+the answer to it.
+
+### The benchmark
+
+```bash
+npm run benchmark                       # the field-testing regression set
+npm run benchmark -- 7290000066318      # or any barcodes you like
+```
+
+Prints, per provider per barcode: found, name, brand, image, ingredients,
+allergen status, traces status, peanut signal (and which field it came from),
+reliability, last updated, duration and errors — then a summary table and the
+final verdict. It **never fabricates a result**: a provider without credentials
+reports `not-implemented` and is listed as such, because that is a finding.
+
+Measured on 2026-09-04:
+
+| Barcode | Product | Identity | Allergens | Verdict |
+| --- | --- | --- | --- | --- |
+| `7290000446547` | B&D peanut butter | ✅ | `en:peanuts` | **RED** |
+| `037600309417` | Skippy peanut butter | ✅ | `en:peanuts` | **RED** |
+| `7290000074184` | Osem Petit Beurre | ✅ | — | ORANGE |
+| `7290105693341` | Bamba | ✅ | — | ORANGE |
+
+Bamba is the uncomfortable one: a ~50% peanut snack, the most likely thing a
+kindergarten actually has on the shelf, and the database holds a name and
+nothing else. It is correctly ORANGE rather than GREEN — but no database tuning
+fixes it, which is precisely why the photo path is the primary ORANGE action.
+
+### Optional serverless proxies (none deployed)
+
+**No serverless infrastructure was added.** Everything ships as static files.
+Two future features would each need one minimal, stateless function — no
+database, no auth, no session:
+
+```
+FatSecret       GET  <proxy>/fatsecret/barcode/:gtin13
+                holds FATSECRET_CLIENT_ID / FATSECRET_CLIENT_SECRET
+
+Remote Vision   POST <proxy>
+                { "image": "<base64>", "mimeType": "image/png" }
+                → { "text": "<verbatim label text>" }
+                holds the model API key
+```
+
+The Vision proxy must return **text only** — never a verdict, never a boolean.
+Remote text runs through the same `analyzePackageText` rules as local OCR, so a
+remote model cannot invent a decision path of its own. Set
+`VITE_*_PROXY_URL` to the proxy origin; a key must never appear in any `VITE_*`
+variable, because everything prefixed `VITE_` is bundled into the browser.
 
 ## Adding a New Product Data Provider
 
@@ -423,10 +550,45 @@ barcode → providers → assessment
    GREEN → shown as GREEN, photo offered as an optional double-check
    ORANGE→ photo capture offered as the primary action
               ↓
-      photo → OCR → PackageEvidence → re-assessed with the barcode evidence
-              ↓
-      explicit peanut wording → RED      no wording found → still ORANGE
+      photo → quality gate → OCR → PackageEvidence → re-assessed together
+              ↓                          with the barcode evidence
+      explicit peanut wording → RED
+      good read, nothing found → still ORANGE
+      poor / partial read      → still ORANGE + ask for a retake
 ```
+
+Choosing a photo starts the analysis **immediately**. There is no second
+"analyze" tap: the extra click bought nothing, and every tap between a worried
+adult and an answer is a tap too many.
+
+### The quality gate — knowing when we did NOT read the label
+
+Field testing showed the real problem was not OCR accuracy. It was that a
+*failed* read looks exactly like a *successful* read that found nothing. Both
+produce an empty result, and only one of them means anything.
+
+So every photo gets a pragmatic `good` / `partial` / `poor` verdict, from
+signals that are cheap because the pixels are already in hand:
+
+| Signal | Where it comes from |
+| --- | --- |
+| Focus (variance of the Laplacian) | the greyscale buffer, during preprocessing |
+| Resolution | the decoded image |
+| OCR confidence | Tesseract |
+| Readable character count | recognized text |
+| Meaningful line count | an allergen panel is several lines; one stray line is not |
+| Text coverage of the frame | Tesseract block bounding boxes — catches "photographed the front of the box" |
+
+**The gate governs how we describe a photo, never whether danger counts.** A
+blurry, tiny, low-confidence photo that still reads `PEANUT` is RED. The gate
+only decides how loudly the app says *finding nothing here proves nothing*, and
+whether to ask for another photo. That contract is asserted by a test.
+
+`poor` and `partial` both keep the result ORANGE and ask for a retake with
+specific guidance — מקרוב · ישר מול האריזה · באור טוב · ללא השתקפות · כל אזור
+הרכיבים בתמונה — rather than reporting an error the user cannot act on. A
+retake is never requested when the photo already found peanuts: there is
+nothing left to look for.
 
 ### THE VISION SAFETY RULE
 
@@ -454,7 +616,9 @@ Consequences, all covered by tests:
 | --- | --- |
 | Photo reads `מכיל בוטנים` / `Peanut Butter` / `arachis hypogaea` | RED |
 | Photo reads `עלול להכיל בוטנים` / `may contain peanuts` | RED |
-| Photo reads nothing / is blurry / analysis crashes | unchanged (ORANGE stays ORANGE) |
+| Photo reads nothing / is blurry / analysis crashes | unchanged (ORANGE stays ORANGE) + retake asked |
+| Photo is only a partial read | unchanged + retake asked |
+| Remote Vision fails or is unreachable | unchanged |
 | Photo reads `ללא בוטנים` | unchanged — a photographed claim is not a verified record |
 | Barcode was GREEN, photo finds peanuts | RED, with a conflict flag |
 | Barcode was RED, photo finds nothing | RED |
@@ -481,6 +645,14 @@ sending photos of a customer's shopping to a third party.
 
 **No backend or serverless proxy was introduced.** The photo never leaves the
 device. Nothing in `appConfig` holds a credential, and nothing may.
+
+### Preprocessing — benchmarked, not assumed
+
+Resize to a 1600px long edge, greyscale, conservative contrast stretch. Tried
+and **rejected**: self-binarisation, hard sharpening, and upscaling small
+images — all three lost accuracy against Tesseract's own adaptive
+thresholding. Over-processing makes OCR worse, so the pipeline stops early on
+purpose. See [`docs/research-2026-09.md`](docs/research-2026-09.md).
 
 Engine assets (WASM core ~4 MB, `heb` ~0.6 MB, `eng` ~3 MB) come from the
 jsDelivr CDN **on first use only** and are cached by Tesseract.js in IndexedDB.
@@ -565,9 +737,22 @@ cannot reach a production bundle.
 * **The camera needs HTTPS or localhost**, and older browsers fall back to
   ZXing, which is slower on low-end phones. Manual entry always works.
 * **The tool checks peanuts only.** Other allergens are modeled but not surfaced.
+* **Product confirmation depends on the user.** If someone taps "כן" for the
+  wrong product the app will report that product's data. The identity card
+  shows image, name, brand and barcode precisely so that mistake is visible.
 * **OCR is not a reader of intent.** Tesseract reads clean printed labels well
   and struggles with curved foil, low contrast, glare and stylised type. Every
   such failure lands on ORANGE, so it costs a retake, never a wrong clearance.
+* **The quality gate is heuristic, not a measurement.** Its thresholds were
+  calibrated on greyscale 1600px images of printed labels, and it can call a
+  usable photo `partial`. It errs that way on purpose: an extra retake is
+  cheap, a confident "we read the label" that is false is not.
+* **A perfect read of the wrong panel still reads nothing useful.** Text
+  coverage catches the obvious "photographed the front of the box" case, but
+  the app cannot tell an ingredients panel from a nutrition table.
+* **Product-name matching is a blunt instrument.** A product whose name
+  contains a peanut word is RED even if it is peanut-free in fact. That is the
+  intended direction of error, but it will occasionally over-warn.
 * **Photo analysis needs one CDN fetch.** The first scan on a device downloads
   the engine (~8 MB, then cached in IndexedDB). Offline, the barcode path still
   works and the photo option reports that analysis is unavailable.

@@ -12,7 +12,8 @@
     "typecheck": "tsc -b --force",
     "lint": "oxlint",
     "check:barcode": "tsx scripts/checkBarcode.ts",
-    "verify": "npm run typecheck && npm run lint && npm run test && npm run build"
+    "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "benchmark": "tsx scripts/benchmarkProviders.ts"
   },
   "dependencies": {
     "@zxing/browser": "^0.2.1",
@@ -23,10 +24,13 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.3",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.1.0",
+    "jsdom": "^29.1.1",
     "oxlint": "^1.79.0",
     "tsx": "^4.23.13",
     "typescript": "~6.0.2",

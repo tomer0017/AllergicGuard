@@ -84,6 +84,8 @@ export function PackageScanFindings({ scans }: PackageScanFindingsProps) {
               <dd>{evidence.analysisMethod}</dd>
               <dt>איכות קריאה</dt>
               <dd>{QUALITY_HEBREW[evidence.imageQuality]}</dd>
+              <dt>ניסיון</dt>
+              <dd>{index + 1}</dd>
             </dl>
           </div>
         );

@@ -24,6 +24,14 @@ export type AppErrorCode =
   | 'PACKAGE_ANALYSIS_UNAVAILABLE'
   | 'PACKAGE_ANALYSIS_FAILED'
   | 'PACKAGE_IMAGE_UNREADABLE'
+  | 'IMAGE_TOO_SMALL'
+  | 'IMAGE_TOO_BLURRY'
+  | 'NO_TEXT_DETECTED'
+  | 'OCR_LOW_CONFIDENCE'
+  | 'OCR_FAILED'
+  | 'VISION_PROVIDER_FAILED'
+  | 'IMAGE_READ_PARTIAL'
+  | 'PACKAGE_SECTION_NOT_VISIBLE'
   | 'UNKNOWN_ERROR';
 
 export interface AppError {
@@ -53,7 +61,17 @@ const DEFAULT_USER_MESSAGES: Record<AppErrorCode, string> = {
   ALLERGEN_DATA_MISSING: 'לא נמצא מידע על אלרגנים עבור המוצר.',
   PACKAGE_ANALYSIS_UNAVAILABLE: 'ניתוח צילום האריזה אינו זמין כרגע. יש לבדוק את הסימון על האריזה.',
   PACKAGE_ANALYSIS_FAILED: 'לא הצלחנו לנתח את התמונה. יש לבדוק את סימון האלרגנים על האריזה.',
-  PACKAGE_IMAGE_UNREADABLE: 'לא הצלחנו לקרוא את הסימון בצורה ברורה. נסו לצלם שוב מקרוב ובאור טוב.',
+  PACKAGE_IMAGE_UNREADABLE: 'לא הצלחנו לקרוא את סימון האלרגנים בצורה ברורה. צלמו שוב מקרוב ובאור טוב.',
+  // Every image-workflow failure below fails SAFE: it leaves the previous
+  // verdict untouched and asks for a better photo. None of them can clear.
+  IMAGE_TOO_SMALL: 'התמונה קטנה מדי כדי לקרוא את הסימון. צלמו שוב מקרוב.',
+  IMAGE_TOO_BLURRY: 'התמונה מטושטשת. החזיקו את הטלפון יציב וצלמו שוב.',
+  NO_TEXT_DETECTED: 'לא זוהה טקסט בתמונה. צלמו את רשימת הרכיבים וסימון האלרגנים.',
+  OCR_LOW_CONFIDENCE: 'הטקסט לא נקרא בבירור. צלמו שוב מקרוב ובאור טוב, ללא השתקפות.',
+  OCR_FAILED: 'קריאת הטקסט נכשלה. יש לבדוק את סימון האלרגנים שעל האריזה.',
+  VISION_PROVIDER_FAILED: 'ניתוח התמונה נכשל. יש לבדוק את סימון האלרגנים שעל האריזה.',
+  IMAGE_READ_PARTIAL: 'קראנו רק חלק מהסימון. צלמו שוב כך שכל אזור הרכיבים ייכנס לתמונה.',
+  PACKAGE_SECTION_NOT_VISIBLE: 'לא זוהה אזור הרכיבים והאלרגנים. צלמו את הצד של האריזה שבו מופיע הסימון.',
   UNKNOWN_ERROR: 'אירעה שגיאה בלתי צפויה. יש לבדוק את סימון האלרגנים על האריזה.',
 };
 

@@ -82,6 +82,20 @@ function hasSubstantiveContent(evidence: ProductEvidence): boolean {
   );
 }
 
+/**
+ * The product's own name, scanned separately from its ingredients.
+ *
+ * A product called "חמאת בוטנים" or "Skippy Peanut Butter" is dangerous even
+ * when the database carries no allergen fields at all — which is exactly the
+ * common case for Israeli products. This is kept apart from the ingredients
+ * text so the user is told the truth about where the warning came from.
+ */
+function collectNameText(evidence: ProductEvidence): string {
+  return [evidence.productNameHebrew, evidence.productName, evidence.brand]
+    .filter((part): part is string => typeof part === 'string' && part.length > 0)
+    .join(' \n ');
+}
+
 /** Free text we are willing to scan for allergen mentions. */
 function collectScannableText(evidence: ProductEvidence): string {
   return [
@@ -107,6 +121,7 @@ export function assessAllergenRisk(input: AssessmentInput): AllergyAssessment {
   const containsHits: AllergyEvidence[] = [];
   const mayContainHits: AllergyEvidence[] = [];
   const textHits: AllergyEvidence[] = [];
+  const nameHits: AllergyEvidence[] = [];
   const clearingSources: AllergyEvidence[] = [];
 
   let sawAllergenCapableSource = false;
@@ -159,7 +174,19 @@ export function assessAllergenRisk(input: AssessmentInput): AllergyAssessment {
       });
     }
 
-    if (containsMatch.matched || mayContainMatch.matched || textMatch.matched) {
+    // 4. The product's own name. Negation-aware, so a product legitimately
+    //    named "ללא בוטנים" is not flagged.
+    const nameMatch = matchAllergenInText(collectNameText(evidence), matcher);
+    if (nameMatch.matched) {
+      nameHits.push({
+        ...sourceMeta(evidence),
+        kind: 'product_name_match',
+        detail: `The product name itself names the allergen: ${nameMatch.matchedTerms.join(', ')}`,
+        matchedTerms: nameMatch.matchedTerms,
+      });
+    }
+
+    if (containsMatch.matched || mayContainMatch.matched || textMatch.matched || nameMatch.matched) {
       continue;
     }
 
@@ -226,7 +253,7 @@ export function assessAllergenRisk(input: AssessmentInput): AllergyAssessment {
     });
   }
 
-  const positiveHits = [...containsHits, ...mayContainHits, ...textHits];
+  const positiveHits = [...containsHits, ...mayContainHits, ...textHits, ...nameHits];
   const hasConflict =
     conflicts.length > 0 || (positiveHits.length > 0 && clearingSources.length > 0);
 
@@ -257,6 +284,16 @@ export function assessAllergenRisk(input: AssessmentInput): AllergyAssessment {
       allergen,
       reasonCode: 'ALLERGEN_FOUND_IN_TEXT',
       reason: `The allergen is mentioned in source text by: ${textHits.map((hit) => hit.providerId).join(', ')}.`,
+      evidence: [...positiveHits, ...clearingSources, ...findings],
+      hasConflict,
+    };
+  }
+  if (nameHits.length > 0) {
+    return {
+      status: 'danger',
+      allergen,
+      reasonCode: 'ALLERGEN_IN_PRODUCT_NAME',
+      reason: `The product name itself names the allergen, reported by: ${nameHits.map((hit) => hit.providerId).join(', ')}.`,
       evidence: [...positiveHits, ...clearingSources, ...findings],
       hasConflict,
     };

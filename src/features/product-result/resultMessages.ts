@@ -26,6 +26,7 @@ const REASON_TEXT: Record<AssessmentReasonCode, string> = {
   CONTAINS_DECLARED: 'המוצר מסומן כמכיל בוטנים.',
   MAY_CONTAIN_DECLARED: 'המוצר מסומן כעלול להכיל בוטנים או עקבות בוטנים.',
   ALLERGEN_FOUND_IN_TEXT: 'נמצא אזכור של בוטנים ברשימת הרכיבים או באזהרות של המוצר.',
+  ALLERGEN_IN_PRODUCT_NAME: 'שם המוצר עצמו כולל בוטנים.',
 
   NO_SOURCES_RESPONDED: 'לא הצלחנו לקבל מידע אמין על המוצר.',
   PRODUCT_NOT_FOUND: 'המוצר לא נמצא במאגרי המידע.',
@@ -100,6 +101,8 @@ export function describeEvidenceKind(kind: string): string {
       return 'סימון "עלול להכיל"/עקבות';
     case 'text_match':
       return 'אזכור בטקסט הרכיבים';
+    case 'product_name_match':
+      return 'בוטנים בשם המוצר';
     case 'no_indication':
       return 'לא נמצא סימון לבוטנים';
     case 'allergen_data_missing':

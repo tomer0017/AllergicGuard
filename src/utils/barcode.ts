@@ -66,6 +66,16 @@ export function toComparableBarcode(input: string): string {
   return digits.length > 0 ? digits : '0';
 }
 
+/**
+ * Zero-padded 13-digit form, as several product APIs require.
+ *
+ * FatSecret, for example: "Barcodes must be specified as GTIN-13 numbers - a
+ * 13-digit number filled in with zeros for the spaces to the left."
+ */
+export function toGtin13(input: string): string {
+  return normalizeBarcode(input).padStart(13, '0').slice(-13);
+}
+
 /** True when two barcodes denote the same GS1 article number. */
 export function isSameBarcode(a: string, b: string): boolean {
   return toComparableBarcode(a) === toComparableBarcode(b);

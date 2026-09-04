@@ -36,14 +36,21 @@ import type {
   PackageStatementKind,
 } from '../../domain/package/packageEvidence.ts';
 import type { SourceReliability } from '../../domain/product/productEvidence.ts';
+import type { ImageQualityMetrics } from './imagePreparation.ts';
 
 /** Precautionary ("may contain") wording. Checked before the contains wording. */
 const MAY_CONTAIN_MARKERS = [
   'עלול להכיל',
+  'עלולה להכיל',
   'עלולים להכיל',
+  'עלולות להכיל',
   'עשוי להכיל',
+  'עשויה להכיל',
   'עשויים להכיל',
+  'עשויות להכיל',
   'עלול לכלול',
+  'יתכן ומכיל',
+  'ייתכן ומכיל',
   'עקבות',
   'שאריות',
   'מיוצר במפעל',
@@ -62,7 +69,9 @@ const MAY_CONTAIN_MARKERS = [
 /** Positive declaration / ingredient-panel wording. */
 const CONTAINS_MARKERS = [
   'מכיל',
+  'מכילה',
   'מכילים',
+  'מכילות',
   'רכיבים',
   'מרכיבים',
   'אלרגנים',
@@ -120,12 +129,24 @@ const FUZZY_TARGETS: readonly { readonly word: string; readonly minLength: numbe
   { word: 'peanuts', minLength: 6 },
 ];
 
+/**
+ * QUALITY GATE THRESHOLDS
+ *
+ * These are pragmatic heuristics, not a measurement of correctness. They exist
+ * to answer one question: "is it honest to tell the user we read this label?"
+ * They never gate a positive finding — see assessImageQuality's contract.
+ */
 /** Below this many recognized characters the photo is unusable as a negative. */
 const MIN_USABLE_TEXT_LENGTH = 12;
 /** Below this the photo is only a partial read. */
 const PARTIAL_TEXT_LENGTH = 40;
 const POOR_CONFIDENCE = 40;
 const PARTIAL_CONFIDENCE = 65;
+/** An allergen panel is several lines. One stray line is not a panel. */
+const PARTIAL_LINE_COUNT = 3;
+/** Fraction of the frame covered by recognized text. */
+const POOR_TEXT_COVERAGE = 0.01;
+const PARTIAL_TEXT_COVERAGE = 0.04;
 
 export interface PackageTextAnalysisInput {
   readonly providerId: string;
@@ -135,6 +156,10 @@ export interface PackageTextAnalysisInput {
   readonly text: string;
   readonly confidence?: number;
   readonly durationMs: number;
+  /** Focus, size and contrast measured while preparing the image. */
+  readonly imageMetrics?: ImageQualityMetrics;
+  /** Fraction of the frame covered by recognized text blocks, 0-1. */
+  readonly textCoverageRatio?: number;
   /** Provider-level notes (small image, engine warnings, …). */
   readonly warnings?: readonly string[];
   readonly rawAnalysisAvailable?: boolean;
@@ -185,9 +210,12 @@ function fuzzyPeanutTerms(normalizedSegment: string): string[] {
   const found: string[] = [];
   for (const token of normalizedSegment.split(/\s+/u)) {
     if (token.length < 4) continue;
+    // An exact spelling of ANY target is the strict pass's business — including
+    // "peanuts" against the "peanut" target. Re-matching it here would let the
+    // fuzzy pass resurrect a hit the strict pass deliberately rejected.
+    if (FUZZY_TARGETS.some((target) => token === target.word)) continue;
     for (const target of FUZZY_TARGETS) {
       if (token.length < target.minLength) continue;
-      if (token === target.word) continue; // exact hits are handled by the strict pass
       if (withinEditDistance(token, target.word, 1)) found.push(token);
     }
   }
@@ -211,12 +239,47 @@ function trimForDisplay(segment: string): string {
   return collapsed.length > 120 ? `${collapsed.slice(0, 117)}…` : collapsed;
 }
 
-function assessImageQuality(text: string, confidence: number | undefined): ImageQuality {
-  const length = text.replace(/\s+/gu, '').length;
-  if (length < MIN_USABLE_TEXT_LENGTH) return 'poor';
-  if (confidence !== undefined && confidence < POOR_CONFIDENCE) return 'poor';
-  if (length < PARTIAL_TEXT_LENGTH) return 'partial';
-  if (confidence !== undefined && confidence < PARTIAL_CONFIDENCE) return 'partial';
+/** Lines with enough letters to be part of an ingredients panel. */
+function countMeaningfulLines(text: string): number {
+  return text
+    .split(/[\n\r]+/u)
+    .filter((line) => (line.match(/[\p{L}\p{N}]/gu) ?? []).length >= 4).length;
+}
+
+export interface QualityInput {
+  readonly readableCharacterCount: number;
+  readonly meaningfulLineCount: number;
+  readonly ocrConfidence?: number;
+  readonly imageMetrics?: ImageQualityMetrics;
+  readonly textCoverageRatio?: number;
+}
+
+/**
+ * Pragmatic GOOD / PARTIAL / POOR verdict on whether we actually read the label.
+ *
+ * CONTRACT: this is a statement about the PHOTO, never about the PRODUCT. It
+ * decides how loudly the app says "finding nothing here proves nothing", and
+ * whether to ask for a retake. It never suppresses a peanut finding — a blurry
+ * photo that still reads "PEANUT" is danger, and `analyzePackageText` records
+ * the finding regardless of what this function returns.
+ */
+export function assessImageQuality(input: QualityInput): ImageQuality {
+  const { readableCharacterCount, meaningfulLineCount, ocrConfidence, imageMetrics, textCoverageRatio } = input;
+
+  // ---- POOR: we cannot honestly claim to have read anything. ----
+  if (readableCharacterCount < MIN_USABLE_TEXT_LENGTH) return 'poor';
+  if (ocrConfidence !== undefined && ocrConfidence < POOR_CONFIDENCE) return 'poor';
+  if (imageMetrics?.focus === 'blurred') return 'poor';
+  if (textCoverageRatio !== undefined && textCoverageRatio < POOR_TEXT_COVERAGE) return 'poor';
+
+  // ---- PARTIAL: some text, but not a whole allergen panel. ----
+  if (readableCharacterCount < PARTIAL_TEXT_LENGTH) return 'partial';
+  if (ocrConfidence !== undefined && ocrConfidence < PARTIAL_CONFIDENCE) return 'partial';
+  if (meaningfulLineCount < PARTIAL_LINE_COUNT) return 'partial';
+  if (imageMetrics?.focus === 'soft') return 'partial';
+  if (imageMetrics?.tooSmall) return 'partial';
+  if (textCoverageRatio !== undefined && textCoverageRatio < PARTIAL_TEXT_COVERAGE) return 'partial';
+
   return 'good';
 }
 
@@ -244,9 +307,14 @@ export function analyzePackageText(input: PackageTextAnalysisInput): PackageEvid
       }
     }
 
-    // Pass 3 — distance-1 fuzzy. Never applied to a segment that declares the
-    // absence of the allergen: a misread "ללא בוטנים" must not become RED.
-    if (matchedTerms.length === 0 && !hasMarker(normalized, NEGATION_MARKERS)) {
+    // Pass 3 — distance-1 fuzzy. Never applied where the allergen's ABSENCE is
+    // being declared: a misread "ללא בוטנים" must not become RED, and neither
+    // must "contains no peanuts", which the strict pass already rejected.
+    if (
+      matchedTerms.length === 0 &&
+      !strict.onlyNegatedMatches &&
+      !hasMarker(normalized, NEGATION_MARKERS)
+    ) {
       const fuzzy = fuzzyPeanutTerms(normalized);
       if (fuzzy.length > 0) {
         matchedTerms = fuzzy;
@@ -272,7 +340,15 @@ export function analyzePackageText(input: PackageTextAnalysisInput): PackageEvid
     .filter((statement) => statement.kind !== 'may_contain')
     .map((statement) => statement.text);
 
-  const imageQuality = assessImageQuality(text, input.confidence);
+  const readableCharacterCount = (text.match(/[\p{L}\p{N}]/gu) ?? []).length;
+  const meaningfulLineCount = countMeaningfulLines(text);
+  const imageQuality = assessImageQuality({
+    readableCharacterCount,
+    meaningfulLineCount,
+    ocrConfidence: input.confidence,
+    imageMetrics: input.imageMetrics,
+    textCoverageRatio: input.textCoverageRatio,
+  });
   const warnings = [...(input.warnings ?? [])];
 
   if (imageQuality === 'poor') {
@@ -295,9 +371,17 @@ export function analyzePackageText(input: PackageTextAnalysisInput): PackageEvid
     containsAllergens,
     mayContainAllergens,
     statements,
-    detectedProductTerms: [...detectedTerms],
+    detectedPeanutTerms: [...detectedTerms],
     explicitPeanutEvidence: statements.length > 0,
     imageQuality,
+    confidenceMetadata: {
+      ocrConfidence: input.confidence,
+      readableCharacterCount,
+      meaningfulLineCount,
+      textCoverageRatio: input.textCoverageRatio,
+      focusScore: input.imageMetrics?.focusScore,
+      focus: input.imageMetrics?.focus,
+    },
     warnings,
     rawAnalysisAvailable: input.rawAnalysisAvailable ?? false,
     analyzedAt: input.analyzedAt ?? new Date().toISOString(),

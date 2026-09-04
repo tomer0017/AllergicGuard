@@ -86,13 +86,16 @@ export function DebugPanel({ result, logs }: DebugPanelProps) {
                     <code>{scan.packageEvidence.durationMs}ms</code>
                   </p>
                   <p>
-                    image quality: <code>{scan.packageEvidence.imageQuality}</code> · confidence:{' '}
-                    <code>{scan.packageEvidence.textConfidence?.toFixed(1) ?? '—'}</code> · text length:{' '}
+                    image quality: <code>{scan.packageEvidence.imageQuality}</code> · text length:{' '}
                     <code>{scan.packageEvidence.extractedText.length}</code>
                   </p>
                   <p>
+                    quality metrics (NOT a safety score):{' '}
+                    <code>{JSON.stringify(scan.packageEvidence.confidenceMetadata ?? {})}</code>
+                  </p>
+                  <p>
                     detected terms:{' '}
-                    <code>{scan.packageEvidence.detectedProductTerms.join(', ') || '—'}</code>
+                    <code>{scan.packageEvidence.detectedPeanutTerms.join(', ') || '—'}</code>
                   </p>
                   <p>
                     contains evidence:{' '}

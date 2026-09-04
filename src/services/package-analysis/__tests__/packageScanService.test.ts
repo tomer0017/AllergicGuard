@@ -176,3 +176,143 @@ describe('TesseractOcrProvider', () => {
     expect(result.status === 'error' && result.error.code).toBe('PACKAGE_ANALYSIS_FAILED');
   });
 });
+
+describe('provider escalation', () => {
+  /** A provider that always returns the given text, recording that it ran. */
+  function recording(id: string, text: string, confidence = 90) {
+    const calls = { count: 0 };
+    const provider: PackageAnalysisProvider = {
+      id,
+      name: id,
+      enabled: true,
+      analysisMethod: id,
+      analyze: async () => {
+        calls.count += 1;
+        return {
+          status: 'success' as const,
+          evidence: analyzePackageText({
+            providerId: id,
+            providerName: id,
+            analysisMethod: id,
+            reliability: 'medium',
+            text,
+            confidence,
+            durationMs: 1,
+          }),
+          diagnostics: {
+            providerId: id,
+            providerName: id,
+            requestId: 'req',
+            startedAt: new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+            durationMs: 1,
+            imageBytes: 1,
+            imageType: 'image/jpeg',
+            extractedTextLength: text.length,
+            warnings: [],
+          },
+        };
+      },
+    };
+    return { provider, calls };
+  }
+
+  const GOOD_LABEL = [
+    'רכיבים: קמח חיטה, סוכר, שמן דקלים, מלח.',
+    'מייצב, חומר תפיחה, ארומה, ויטמינים.',
+    'לשמור במקום קריר ויבש הרחק מלחות.',
+    'תוצרת ישראל. יצרן: דוגמה בעמ, תל אביב.',
+  ].join('\n');
+
+  it('stops at the first provider when it finds explicit peanut evidence', async () => {
+    // No reason to pay a remote model to confirm what the label already says.
+    const first = recording('local', 'מכיל: בוטנים.');
+    const second = recording('remote', GOOD_LABEL);
+    const service = new PackageScanService({
+      providers: [first.provider, second.provider],
+      logger: silentLogger(),
+    });
+
+    const outcome = await service.analyze(imageBlob(), { requestId: 'req' });
+
+    expect(outcome.status === 'success' && outcome.evidence.explicitPeanutEvidence).toBe(true);
+    expect(second.calls.count).toBe(0);
+  });
+
+  it('stops at the first provider when it produced a good read that found nothing', async () => {
+    const first = recording('local', GOOD_LABEL);
+    const second = recording('remote', 'מכיל: בוטנים.');
+    const service = new PackageScanService({
+      providers: [first.provider, second.provider],
+      logger: silentLogger(),
+    });
+
+    const outcome = await service.analyze(imageBlob(), { requestId: 'req' });
+
+    expect(outcome.status === 'success' && outcome.evidence.imageQuality).toBe('good');
+    expect(second.calls.count).toBe(0);
+  });
+
+  it('escalates to the next provider when the local read was poor', async () => {
+    const first = recording('local', 'xy', 10);
+    const second = recording('remote', 'עלול להכיל בוטנים.');
+    const service = new PackageScanService({
+      providers: [first.provider, second.provider],
+      logger: silentLogger(),
+    });
+
+    const outcome = await service.analyze(imageBlob(), { requestId: 'req' });
+
+    expect(second.calls.count).toBe(1);
+    expect(outcome.status === 'success' && outcome.evidence.explicitPeanutEvidence).toBe(true);
+  });
+
+  it('falls back to the first provider when escalation also found nothing', async () => {
+    const first = recording('local', 'xy', 10);
+    const second = recording('remote', 'ab', 10);
+    const service = new PackageScanService({
+      providers: [first.provider, second.provider],
+      logger: silentLogger(),
+    });
+
+    const outcome = await service.analyze(imageBlob(), { requestId: 'req' });
+
+    expect(outcome.status).toBe('success');
+    expect(outcome.status === 'success' && outcome.evidence.providerId).toBe('local');
+  });
+
+  it('skips a broken provider and uses the working one', async () => {
+    const broken: PackageAnalysisProvider = {
+      ...textProvider(''),
+      id: 'broken',
+      analyze: async () => {
+        throw new Error('down');
+      },
+    };
+    const working = recording('remote', 'מכיל: בוטנים.');
+    const service = new PackageScanService({
+      providers: [broken, working.provider],
+      logger: silentLogger(),
+    });
+
+    const outcome = await service.analyze(imageBlob(), { requestId: 'req' });
+    expect(outcome.status === 'success' && outcome.evidence.explicitPeanutEvidence).toBe(true);
+  });
+
+  it('reports an error when every provider failed — never empty evidence', async () => {
+    const broken = (id: string): PackageAnalysisProvider => ({
+      ...textProvider(''),
+      id,
+      analyze: async () => {
+        throw new Error('down');
+      },
+    });
+    const service = new PackageScanService({
+      providers: [broken('a'), broken('b')],
+      logger: silentLogger(),
+    });
+
+    const outcome = await service.analyze(imageBlob(), { requestId: 'req' });
+    expect(outcome.status).toBe('error');
+  });
+});

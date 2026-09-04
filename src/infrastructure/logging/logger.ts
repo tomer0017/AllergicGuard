@@ -16,7 +16,12 @@ export type LogStage =
   | 'LOOKUP'
   | 'PROVIDER'
   | 'AGGREGATE'
+  | 'PRODUCT'
+  | 'CONFIRM'
   | 'PACKAGE_SCAN'
+  | 'QUALITY'
+  | 'OCR'
+  | 'ALLERGEN'
   | 'ASSESSMENT'
   | 'CACHE'
   | 'HTTP';

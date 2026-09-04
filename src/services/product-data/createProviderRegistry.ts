@@ -11,6 +11,7 @@ import { ProviderRegistry } from './providerRegistry.ts';
 import { OpenFoodFactsProvider } from './providers/openFoodFacts/openFoodFactsProvider.ts';
 import { Gs1IsraelProvider } from './providers/gs1Israel/gs1IsraelProvider.ts';
 import { IsraelRetailProvider } from './providers/israelRetail/israelRetailProvider.ts';
+import { FatSecretProvider } from './providers/fatSecret/fatSecretProvider.ts';
 
 export function createProviderRegistry(
   config: AppConfig,
@@ -32,6 +33,10 @@ export function createProviderRegistry(
     new IsraelRetailProvider({
       enabled: config.providers.israelRetail.enabled,
       baseUrl: config.providers.israelRetail.baseUrl,
+    }),
+    new FatSecretProvider({
+      enabled: config.providers.fatSecret.enabled,
+      proxyUrl: config.providers.fatSecret.proxyUrl,
     }),
   ]);
 }

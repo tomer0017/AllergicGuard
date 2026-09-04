@@ -305,3 +305,68 @@ describe('CRITICAL INVARIANT: missing data can never be GREEN', () => {
     expect(assessPeanutRisk(input)).toEqual(assessPeanutRisk(input));
   });
 });
+
+describe('the product name itself', () => {
+  it('is danger when the name says peanut butter, even with no allergen fields', () => {
+    // The Skippy/B&D shape: databases often carry a name and nothing else.
+    const assessment = assessPeanutRisk({
+      evidence: [
+        makeEvidence({
+          productNameHebrew: 'חמאת בוטנים טבעית',
+          allergenDataStatus: 'missing',
+          mayContainDataStatus: 'missing',
+        }),
+      ],
+    });
+    expect(assessment.status).toBe('danger');
+    expect(assessment.reasonCode).toBe('ALLERGEN_IN_PRODUCT_NAME');
+  });
+
+  it('is danger for an English product name', () => {
+    expect(
+      assessPeanutRisk({
+        evidence: [makeEvidence({ productName: 'Skippy Peanut Butter Creamy', allergenDataStatus: 'empty' })],
+      }).status,
+    ).toBe('danger');
+  });
+
+  it('is danger when only the brand names the allergen', () => {
+    expect(
+      assessPeanutRisk({ evidence: [makeEvidence({ productName: 'Creamy Spread', brand: 'Peanut Co' })] }).status,
+    ).toBe('danger');
+  });
+
+  it('does not fire on a product legitimately named "ללא בוטנים"', () => {
+    const assessment = assessPeanutRisk({
+      evidence: [makeClearingEvidence({ productNameHebrew: 'ממרח ללא בוטנים' })],
+    });
+    expect(assessment.status).toBe('no_known_risk');
+  });
+
+  it('does not fire on an ordinary product name', () => {
+    expect(
+      assessPeanutRisk({ evidence: [makeClearingEvidence({ productNameHebrew: 'ביסקוויט פתי בר' })] }).status,
+    ).toBe('no_known_risk');
+  });
+
+  it('ranks a declared "contains" above a name match in the reason code', () => {
+    const assessment = assessPeanutRisk({
+      evidence: [makeEvidence({ productName: 'Peanut Butter', containsAllergens: ['en:peanuts'] })],
+    });
+    expect(assessment.reasonCode).toBe('CONTAINS_DECLARED');
+  });
+});
+
+describe('everything failing at once', () => {
+  it('is insufficient_data when every source errored and nothing was read', () => {
+    const assessment = assessPeanutRisk({
+      evidence: [],
+      unavailableSources: [
+        { providerId: 'off', providerName: 'OFF', reason: 'error', detail: 'network' },
+        { providerId: 'other', providerName: 'Other', reason: 'error', detail: 'timeout' },
+      ],
+    });
+    expect(assessment.status).toBe('insufficient_data');
+    expect(assessment.reasonCode).toBe('NO_SOURCES_RESPONDED');
+  });
+});

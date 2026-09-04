@@ -14,6 +14,7 @@ export type AssessmentReasonCode =
   | 'CONTAINS_DECLARED'
   | 'MAY_CONTAIN_DECLARED'
   | 'ALLERGEN_FOUND_IN_TEXT'
+  | 'ALLERGEN_IN_PRODUCT_NAME'
   // insufficient data
   | 'NO_SOURCES_RESPONDED'
   | 'PRODUCT_NOT_FOUND'
@@ -30,6 +31,7 @@ export type EvidenceKind =
   | 'contains_declared'
   | 'may_contain_declared'
   | 'text_match'
+  | 'product_name_match'
   | 'no_indication'
   | 'allergen_data_missing'
   | 'allergen_data_insubstantial'

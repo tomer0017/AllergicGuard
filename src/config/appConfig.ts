@@ -40,6 +40,8 @@ export interface AppConfig {
     readonly openFoodFacts: { readonly enabled: boolean; readonly baseUrl: string };
     readonly gs1Israel: { readonly enabled: boolean; readonly baseUrl: string };
     readonly israelRetail: { readonly enabled: boolean; readonly baseUrl: string };
+    /** Requires a credential-holding proxy; see the provider file. */
+    readonly fatSecret: { readonly enabled: boolean; readonly proxyUrl: string };
   };
 
   readonly http: {
@@ -70,6 +72,15 @@ export interface AppConfig {
     /** Optional self-hosted mirrors for the WASM core / language data. */
     readonly corePath?: string;
     readonly langPath?: string;
+    /**
+     * Optional second opinion for photos local OCR could not read. Disabled
+     * until a proxy exists: a Vision API key may never enter the bundle.
+     */
+    readonly remoteVision: {
+      readonly enabled: boolean;
+      readonly proxyUrl: string;
+      readonly timeoutMs: number;
+    };
   };
 }
 
@@ -96,6 +107,12 @@ export const appConfig: AppConfig = {
       enabled: readBoolean('VITE_ENABLE_ISRAEL_RETAIL', false),
       baseUrl: readString('VITE_ISRAEL_RETAIL_BASE_URL', ''),
     },
+    // Disabled: barcode lookup is Premier-only and allergen access is granted
+    // separately; both need OAuth secrets that cannot ship in a static build.
+    fatSecret: {
+      enabled: readBoolean('VITE_ENABLE_FATSECRET', false),
+      proxyUrl: readString('VITE_FATSECRET_PROXY_URL', ''),
+    },
   },
 
   http: {
@@ -120,5 +137,10 @@ export const appConfig: AppConfig = {
     // Empty means "use the library's jsDelivr default".
     corePath: readString('VITE_PACKAGE_SCAN_CORE_PATH', '') || undefined,
     langPath: readString('VITE_PACKAGE_SCAN_LANG_PATH', '') || undefined,
+    remoteVision: {
+      enabled: readBoolean('VITE_ENABLE_REMOTE_VISION', false),
+      proxyUrl: readString('VITE_REMOTE_VISION_PROXY_URL', ''),
+      timeoutMs: readNumber('VITE_REMOTE_VISION_TIMEOUT_MS', 20000),
+    },
   },
 };

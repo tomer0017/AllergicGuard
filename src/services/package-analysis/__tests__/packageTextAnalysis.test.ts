@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { analyzePackageText, segmentPackageText } from '../packageTextAnalysis.ts';
+import {
+  analyzePackageText,
+  assessImageQuality,
+  segmentPackageText,
+  type PackageTextAnalysisInput,
+} from '../packageTextAnalysis.ts';
+import type { ImageQualityMetrics } from '../imagePreparation.ts';
 
-function analyze(text: string, confidence = 88) {
+function analyze(text: string, confidence = 88, extra: Partial<PackageTextAnalysisInput> = {}) {
   return analyzePackageText({
     providerId: 'test-ocr',
     providerName: 'Test OCR',
@@ -11,11 +17,33 @@ function analyze(text: string, confidence = 88) {
     text,
     confidence,
     durationMs: 10,
+    ...extra,
   });
 }
 
+function metrics(overrides: Partial<ImageQualityMetrics> = {}): ImageQualityMetrics {
+  return {
+    width: 1600,
+    height: 1200,
+    originalWidth: 3200,
+    originalHeight: 2400,
+    focusScore: 400,
+    focus: 'sharp',
+    contrastRange: 200,
+    tooSmall: false,
+    ...overrides,
+  };
+}
+
 /** Padding so short danger phrases are not also flagged as a poor-quality read. */
-const FILLER = '\nרכיבים: קמח חיטה, סוכר, שמן דקלים, מלח, מייצב, חומר תפיחה.\n';
+const FILLER = [
+  '',
+  'רכיבים: קמח חיטה, סוכר, שמן דקלים, מלח.',
+  'מייצב, חומר תפיחה, ארומה, ויטמינים.',
+  'לשמור במקום קריר ויבש הרחק מלחות.',
+  'תוצרת ישראל. יצרן: דוגמה בעמ, תל אביב.',
+  '',
+].join('\n');
 
 describe('segmentPackageText', () => {
   it('splits label text on line breaks, bullets and sentence ends', () => {
@@ -43,7 +71,7 @@ describe('explicit peanut evidence', () => {
     it(`detects peanuts — ${label}`, () => {
       const evidence = analyze(text);
       expect(evidence.explicitPeanutEvidence).toBe(true);
-      expect(evidence.detectedProductTerms.length).toBeGreaterThan(0);
+      expect(evidence.detectedPeanutTerms.length).toBeGreaterThan(0);
       expect(evidence.containsAllergens.length + evidence.mayContainAllergens.length).toBeGreaterThan(0);
     });
   }
@@ -104,6 +132,13 @@ describe('OCR error tolerance', () => {
     expect(evidence.statements[0]?.viaOcrCorrection).toBe(true);
   });
 
+  it('does not resurrect a hit the strict pass rejected as negated', () => {
+    // Regression: "peanuts" is one edit from the "peanut" target, so the fuzzy
+    // pass used to re-match a phrase the negation logic had already dismissed.
+    expect(analyze(`This product contains no peanuts at all.${FILLER}`).explicitPeanutEvidence).toBe(false);
+    expect(analyze(`המוצר אינו מכיל בוטנים כלל.${FILLER}`).explicitPeanutEvidence).toBe(false);
+  });
+
   it('does NOT fuzzy-match inside a "free from" declaration', () => {
     // A misread "ללא בוטנים" must not be turned into a peanut warning.
     expect(analyze(`ללא בוטנימ.${FILLER}`).explicitPeanutEvidence).toBe(false);
@@ -139,5 +174,67 @@ describe('image quality', () => {
     expect(evidence.imageQuality).toBe('poor');
     expect(evidence.explicitPeanutEvidence).toBe(true);
     expect(evidence.containsAllergens.length).toBeGreaterThan(0);
+  });
+});
+
+describe('the quality gate', () => {
+  const readable = { readableCharacterCount: 200, meaningfulLineCount: 6, ocrConfidence: 90 };
+
+  it('is POOR when almost no characters were recognized', () => {
+    expect(assessImageQuality({ ...readable, readableCharacterCount: 5 })).toBe('poor');
+  });
+
+  it('is POOR when OCR confidence collapsed', () => {
+    expect(assessImageQuality({ ...readable, ocrConfidence: 20 })).toBe('poor');
+  });
+
+  it('is POOR when the photo is out of focus, however much text OCR guessed', () => {
+    expect(assessImageQuality({ ...readable, imageMetrics: metrics({ focus: 'blurred' }) })).toBe('poor');
+  });
+
+  it('is POOR when text covers almost none of the frame', () => {
+    // A photo of a shelf, or of the box from a metre away.
+    expect(assessImageQuality({ ...readable, textCoverageRatio: 0.002 })).toBe('poor');
+  });
+
+  it('is PARTIAL for a single stray line rather than a panel', () => {
+    expect(assessImageQuality({ ...readable, meaningfulLineCount: 1 })).toBe('partial');
+  });
+
+  it('is PARTIAL for a soft-focus photo', () => {
+    expect(assessImageQuality({ ...readable, imageMetrics: metrics({ focus: 'soft' }) })).toBe('partial');
+  });
+
+  it('is PARTIAL for a low-resolution photo', () => {
+    expect(assessImageQuality({ ...readable, imageMetrics: metrics({ tooSmall: true }) })).toBe('partial');
+  });
+
+  it('is PARTIAL when text covers only a sliver of the frame', () => {
+    // The classic "photographed the front of the box" case.
+    expect(assessImageQuality({ ...readable, textCoverageRatio: 0.02 })).toBe('partial');
+  });
+
+  it('is GOOD for a dense, sharp, confident read', () => {
+    expect(
+      assessImageQuality({ ...readable, imageMetrics: metrics(), textCoverageRatio: 0.25 }),
+    ).toBe('good');
+  });
+
+  it('NEVER suppresses a peanut finding, whatever the verdict', () => {
+    // The gate governs how we describe a photo, never whether danger counts.
+    const evidence = analyze('PEANUT BUTTER', 15, {
+      imageMetrics: metrics({ focus: 'blurred', tooSmall: true }),
+      textCoverageRatio: 0.001,
+    });
+    expect(evidence.imageQuality).toBe('poor');
+    expect(evidence.explicitPeanutEvidence).toBe(true);
+    expect(evidence.containsAllergens.length).toBeGreaterThan(0);
+  });
+
+  it('reports the metrics behind the verdict without calling them a safety score', () => {
+    const evidence = analyze(FILLER, 88, { imageMetrics: metrics(), textCoverageRatio: 0.2 });
+    expect(evidence.confidenceMetadata?.ocrConfidence).toBe(88);
+    expect(evidence.confidenceMetadata?.meaningfulLineCount).toBeGreaterThanOrEqual(4);
+    expect(evidence.confidenceMetadata?.focus).toBe('sharp');
   });
 });

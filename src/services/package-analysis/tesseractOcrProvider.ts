@@ -25,10 +25,38 @@ import type {
 } from './packageAnalysisProvider.ts';
 
 /** Minimal shape we use from Tesseract.js, so the app is not coupled to it. */
+interface OcrBlock {
+  readonly bbox?: { x0: number; y0: number; x1: number; y1: number };
+}
+
 interface OcrWorker {
   setParameters(params: Record<string, unknown>): Promise<unknown>;
-  recognize(image: Blob | string): Promise<{ data: { text: string; confidence: number } }>;
+  recognize(
+    image: Blob | string,
+  ): Promise<{ data: { text: string; confidence: number; blocks?: OcrBlock[] | null } }>;
   terminate(): Promise<unknown>;
+}
+
+/**
+ * Fraction of the frame covered by recognized text.
+ *
+ * A photo of the front of the box has a couple of large logo words and almost
+ * no coverage; a photo of the ingredients panel is dense with it. This is the
+ * cheapest available signal for "did they photograph the right side?".
+ */
+function textCoverageRatio(
+  blocks: OcrBlock[] | null | undefined,
+  width: number,
+  height: number,
+): number | undefined {
+  if (!blocks || blocks.length === 0 || width <= 0 || height <= 0) return undefined;
+  let covered = 0;
+  for (const block of blocks) {
+    const box = block.bbox;
+    if (!box) continue;
+    covered += Math.max(0, box.x1 - box.x0) * Math.max(0, box.y1 - box.y0);
+  }
+  return Math.min(1, covered / (width * height));
 }
 
 export interface TesseractOcrProviderOptions {
@@ -91,11 +119,15 @@ export class TesseractOcrProvider implements PackageAnalysisProvider {
       context.onProgress?.(0.05, 'preparing');
       const prepared = await prepareImageForOcr(image);
       warnings.push(...prepared.warnings);
-      context.logger.debug('PACKAGE_SCAN', 'image prepared', {
+      const metrics = prepared.metrics;
+      context.logger.debug('QUALITY', 'image prepared', {
         requestId: context.requestId,
         providerId: this.id,
-        original: `${prepared.originalWidth}x${prepared.originalHeight}`,
-        prepared: `${prepared.width}x${prepared.height}`,
+        original: `${metrics.originalWidth}x${metrics.originalHeight}`,
+        prepared: `${metrics.width}x${metrics.height}`,
+        focus: metrics.focus,
+        focusScore: Number.isFinite(metrics.focusScore) ? Math.round(metrics.focusScore) : undefined,
+        contrastRange: Number.isFinite(metrics.contrastRange) ? Math.round(metrics.contrastRange) : undefined,
       });
 
       if (context.signal?.aborted) throw new Error('Analysis aborted');
@@ -107,6 +139,15 @@ export class TesseractOcrProvider implements PackageAnalysisProvider {
 
       context.onProgress?.(0.55, 'recognizing');
       const { data } = await worker.recognize(prepared.source);
+      const coverage = textCoverageRatio(data.blocks, metrics.width, metrics.height);
+
+      context.logger.debug('OCR', 'recognition finished', {
+        requestId: context.requestId,
+        providerId: this.id,
+        textLength: (data.text ?? '').length,
+        confidence: data.confidence,
+        textCoverageRatio: coverage,
+      });
 
       const evidence = analyzePackageText({
         providerId: this.id,
@@ -119,6 +160,8 @@ export class TesseractOcrProvider implements PackageAnalysisProvider {
         text: data.text ?? '',
         confidence: typeof data.confidence === 'number' ? data.confidence : undefined,
         durationMs: Date.now() - startedAtMs,
+        imageMetrics: metrics,
+        textCoverageRatio: coverage,
         warnings,
         rawAnalysisAvailable: true,
       });

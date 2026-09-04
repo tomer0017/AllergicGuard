@@ -1,6 +1,7 @@
 import { lazy, Suspense, useState } from 'react';
 
 import { ManualBarcodeInput } from '../features/manual-barcode/ManualBarcodeInput.tsx';
+import { ProductConfirmation } from '../features/product-confirm/ProductConfirmation.tsx';
 import { ResultScreen } from '../features/product-result/ResultScreen.tsx';
 import { ScannerPanel } from '../features/scanner/ScannerPanel.tsx';
 import { useBarcodeScanner } from '../features/scanner/useBarcodeScanner.ts';
@@ -35,8 +36,15 @@ export default function App() {
     scanner.stop();
   };
 
+  // Rejecting the identified product throws the lookup away and reopens the
+  // camera, so the next scan starts from a clean slate.
+  const handleReject = () => {
+    scan.rejectProduct();
+    void scanner.start();
+  };
+
   return (
-    <div className="app" dir="rtl" lang="he">
+    <div className={`app ${scan.screen === 'home' ? '' : 'app--compact'}`} dir="rtl" lang="he">
       <header className="app__header">
         <h1 className="app__title">AllergicGuard</h1>
         <p className="app__subtitle">בדיקת מוצר לאלרגיית בוטנים</p>
@@ -80,6 +88,14 @@ export default function App() {
             <p className="loading__text">בודקים את המוצר…</p>
             <p className="loading__barcode">{scan.barcodeInFlight}</p>
           </section>
+        )}
+
+        {scan.screen === 'confirming' && scan.pendingConfirmation && (
+          <ProductConfirmation
+            result={scan.pendingConfirmation}
+            onConfirm={scan.confirmProduct}
+            onReject={handleReject}
+          />
         )}
 
         {scan.screen === 'result' && scan.result && (

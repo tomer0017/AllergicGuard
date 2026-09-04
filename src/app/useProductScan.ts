@@ -1,10 +1,16 @@
 /**
- * Screen-level state machine for one scan cycle.
+ * Screen-level state machine for one product session.
  *
- * home -> looking_up -> result -> (scan again) -> home
+ *   home ─scan─▶ looking_up ─▶ confirming ─confirm─▶ result
+ *                                  └──reject──▶ home (scanner reopens)
+ *
+ * The confirmation step exists because a barcode can be misread, and because a
+ * scanner can pick up a neighbouring package on the shelf. It confirms
+ * BARCODE ↔ PHYSICAL PRODUCT and nothing else — it is never an approval that
+ * the product is safe.
  *
  * All decision-making lives in ProductLookupService and the safety engine;
- * this hook only sequences the UI and cancels in-flight lookups.
+ * this hook only sequences the UI and cancels in-flight work.
  */
 
 import { useCallback, useRef, useState } from 'react';
@@ -12,6 +18,7 @@ import { useCallback, useRef, useState } from 'react';
 import { assessPeanutRisk } from '../domain/allergy/assessAllergenRisk.ts';
 import type { AppError } from '../domain/errors/appError.ts';
 import { toAppError } from '../domain/errors/appError.ts';
+import type { ImageQuality } from '../domain/package/packageEvidence.ts';
 import { createRequestId } from '../infrastructure/logging/logger.ts';
 import type { ProductLookupResult } from '../services/product-data/productLookupService.ts';
 import { appServices } from './appServices.ts';
@@ -42,9 +49,19 @@ function buildFailsafeResult(requestId: string, barcode: string, cause: unknown)
   };
 }
 
-export type ScreenState = 'home' | 'looking_up' | 'result';
+export type ScreenState = 'home' | 'looking_up' | 'confirming' | 'result';
 
 export type PackageScanState = 'idle' | 'analyzing';
+
+/**
+ * Why the app is asking for another photo. Every value here means "we did not
+ * read the label", never "the product looks fine".
+ */
+export interface RetakeRequest {
+  readonly reason: 'poor_quality' | 'partial_read' | 'analysis_failed';
+  readonly quality?: ImageQuality;
+  readonly error?: AppError;
+}
 
 export interface PackageScanApi {
   /** False when no analysis provider is enabled in this build. */
@@ -52,73 +69,137 @@ export interface PackageScanApi {
   readonly state: PackageScanState;
   /** 0-1, from the OCR engine. */
   readonly progress: number;
-  /** Set when the last analysis failed. Cleared when a new one starts. */
-  readonly error: AppError | null;
+  /** Set when the last analysis could not read the label. */
+  readonly retake: RetakeRequest | null;
+  /** How many photos have been analyzed in this product session. */
+  readonly attempts: number;
+  /** Analysis starts immediately — there is no separate confirm step. */
   analyze: (image: Blob) => Promise<void>;
-  clearError: () => void;
+  dismissRetake: () => void;
 }
 
 export interface ProductScanApi {
   readonly screen: ScreenState;
   readonly result: ProductLookupResult | null;
   readonly barcodeInFlight: string | null;
+  /** Result awaiting the user's "is this the product?" answer. */
+  readonly pendingConfirmation: ProductLookupResult | null;
   readonly packageScan: PackageScanApi;
   check: (barcode: string) => Promise<void>;
+  confirmProduct: () => void;
+  rejectProduct: () => void;
   reset: () => void;
 }
 
 export function useProductScan(): ProductScanApi {
   const [screen, setScreen] = useState<ScreenState>('home');
   const [result, setResult] = useState<ProductLookupResult | null>(null);
+  const [pending, setPending] = useState<ProductLookupResult | null>(null);
   const [barcodeInFlight, setBarcodeInFlight] = useState<string | null>(null);
   const [packageState, setPackageState] = useState<PackageScanState>('idle');
   const [packageProgress, setPackageProgress] = useState(0);
-  const [packageError, setPackageError] = useState<AppError | null>(null);
+  const [retake, setRetake] = useState<RetakeRequest | null>(null);
+  const [attempts, setAttempts] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   /** Read inside analyze() so the callback never captures a stale result. */
   const resultRef = useRef<ProductLookupResult | null>(null);
 
-  const check = useCallback(async (barcode: string) => {
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    const requestId = createRequestId();
-    setBarcodeInFlight(barcode);
-    setScreen('looking_up');
-
-    let lookupResult: ProductLookupResult;
-    try {
-      lookupResult = await appServices.lookupService.lookup(barcode, {
-        requestId,
-        signal: controller.signal,
-      });
-    } catch (cause) {
-      lookupResult = buildFailsafeResult(requestId, barcode, cause);
-    }
-
-    if (controller.signal.aborted) return;
-    resultRef.current = lookupResult;
-    setResult(lookupResult);
-    setBarcodeInFlight(null);
+  const clearPackageState = useCallback(() => {
     setPackageState('idle');
     setPackageProgress(0);
-    setPackageError(null);
-    setScreen('result');
+    setRetake(null);
+    setAttempts(0);
   }, []);
+
+  const check = useCallback(
+    async (barcode: string) => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      const requestId = createRequestId();
+      setBarcodeInFlight(barcode);
+      setScreen('looking_up');
+
+      let lookupResult: ProductLookupResult;
+      try {
+        lookupResult = await appServices.lookupService.lookup(barcode, {
+          requestId,
+          signal: controller.signal,
+        });
+      } catch (cause) {
+        lookupResult = buildFailsafeResult(requestId, barcode, cause);
+      }
+
+      if (controller.signal.aborted) return;
+
+      appServices.logger.info('PRODUCT', 'lookup completed, awaiting confirmation', {
+        requestId,
+        barcode,
+        productName: lookupResult.product?.displayName,
+        identified: lookupResult.product !== null,
+      });
+
+      // The verdict is NOT shown yet: the user first says whether this is the
+      // package in their hand.
+      clearPackageState();
+      resultRef.current = null;
+      setResult(null);
+      setPending(lookupResult);
+      setBarcodeInFlight(null);
+      setScreen('confirming');
+    },
+    [clearPackageState],
+  );
+
+  const confirmProduct = useCallback(() => {
+    setPending((current) => {
+      if (!current) return null;
+      appServices.logger.info('CONFIRM', 'user confirmed the product', {
+        requestId: current.requestId,
+        barcode: current.barcode,
+        productName: current.product?.displayName,
+      });
+      resultRef.current = current;
+      setResult(current);
+      setScreen('result');
+      return null;
+    });
+  }, []);
+
+  const rejectProduct = useCallback(() => {
+    setPending((current) => {
+      if (current) {
+        // The lookup is discarded entirely: allergen data for the wrong product
+        // is worse than no data at all.
+        appServices.logger.warn('CONFIRM', 'user rejected the product — discarding lookup', {
+          requestId: current.requestId,
+          barcode: current.barcode,
+          productName: current.product?.displayName,
+        });
+      }
+      return null;
+    });
+    resultRef.current = null;
+    setResult(null);
+    clearPackageState();
+    setScreen('home');
+  }, [clearPackageState]);
 
   /**
    * Analyze a photo of the package and fold the finding into the current
-   * result. The merge itself is ProductLookupService's, so the same pure safety
-   * engine that judged the barcode judges the combined evidence.
+   * result. Runs as soon as an image is chosen — there is no "analyze" button.
+   * The merge itself is ProductLookupService's, so the same pure safety engine
+   * that judged the barcode judges the combined evidence.
    */
   const analyzePackage = useCallback(async (image: Blob) => {
     const current = resultRef.current;
     if (!current) return;
 
-    setPackageError(null);
+    setRetake(null);
     setPackageProgress(0);
     setPackageState('analyzing');
+    setAttempts((count) => count + 1);
 
     try {
       const outcome = await appServices.packageScanService.analyze(image, {
@@ -130,22 +211,33 @@ export function useProductScan(): ProductScanApi {
       if (outcome.status === 'error') {
         // A failed analysis leaves the barcode result exactly as it was.
         // It can never soften an existing verdict.
-        setPackageError(outcome.error);
+        setRetake({ reason: 'analysis_failed', error: outcome.error });
         return;
       }
 
-      const merged = appServices.lookupService.applyPackageEvidence(current, outcome.evidence, {
+      const evidence = outcome.evidence;
+      const merged = appServices.lookupService.applyPackageEvidence(current, evidence, {
         requestId: current.requestId,
       });
       resultRef.current = merged;
       setResult(merged);
+
+      // Ask for a better photo whenever we could not honestly claim to have
+      // read the label — but never when the label already told us about
+      // peanuts, because then there is nothing left to find.
+      if (!evidence.explicitPeanutEvidence && evidence.imageQuality !== 'good') {
+        setRetake({
+          reason: evidence.imageQuality === 'poor' ? 'poor_quality' : 'partial_read',
+          quality: evidence.imageQuality,
+        });
+      }
     } catch (cause) {
       const error = toAppError(cause, 'package-scan');
       appServices.logger.error('PACKAGE_SCAN', 'package scan failed unexpectedly', {
         requestId: current.requestId,
         technicalMessage: error.technicalMessage,
       });
-      setPackageError(error);
+      setRetake({ reason: 'analysis_failed', error });
     } finally {
       setPackageState('idle');
       setPackageProgress(0);
@@ -157,26 +249,29 @@ export function useProductScan(): ProductScanApi {
     abortRef.current = null;
     resultRef.current = null;
     setResult(null);
-    setPackageState('idle');
-    setPackageProgress(0);
-    setPackageError(null);
+    setPending(null);
     setBarcodeInFlight(null);
+    clearPackageState();
     setScreen('home');
-  }, []);
+  }, [clearPackageState]);
 
   return {
     screen,
     result,
     barcodeInFlight,
+    pendingConfirmation: pending,
     packageScan: {
       available: appServices.packageScanService.available,
       state: packageState,
       progress: packageProgress,
-      error: packageError,
+      retake,
+      attempts,
       analyze: analyzePackage,
-      clearError: () => setPackageError(null),
+      dismissRetake: () => setRetake(null),
     },
     check,
+    confirmProduct,
+    rejectProduct,
     reset,
   };
 }

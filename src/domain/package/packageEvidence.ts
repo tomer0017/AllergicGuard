@@ -73,8 +73,8 @@ export interface PackageEvidence {
 
   /** Every structured finding, with its wording and how it was matched. */
   readonly statements: readonly PackageStatement[];
-  /** Distinct allergen terms detected anywhere in the image. */
-  readonly detectedProductTerms: readonly string[];
+  /** Distinct peanut terms detected anywhere in the image. */
+  readonly detectedPeanutTerms: readonly string[];
 
   /**
    * True when the package itself states the allergen. This — not the absence
@@ -83,6 +83,19 @@ export interface PackageEvidence {
   readonly explicitPeanutEvidence: boolean;
 
   readonly imageQuality: ImageQuality;
+  /**
+   * Diagnostics behind the quality verdict. These are OCR/photo measurements
+   * and are NEVER a "safety percentage": a 99%-confidence read of the wrong
+   * side of the box tells you nothing about the allergens.
+   */
+  readonly confidenceMetadata?: {
+    readonly ocrConfidence?: number;
+    readonly readableCharacterCount?: number;
+    readonly meaningfulLineCount?: number;
+    readonly textCoverageRatio?: number;
+    readonly focusScore?: number;
+    readonly focus?: 'sharp' | 'soft' | 'blurred';
+  };
   readonly warnings: readonly string[];
   /** True when raw provider output was retained for the debug panel. */
   readonly rawAnalysisAvailable: boolean;
