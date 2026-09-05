@@ -1,10 +1,13 @@
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
+import { ChevronRight } from 'lucide-react';
 
+import { HomeScreen } from '../features/home/HomeScreen.tsx';
 import { ManualBarcodeInput } from '../features/manual-barcode/ManualBarcodeInput.tsx';
 import { ProductConfirmation } from '../features/product-confirm/ProductConfirmation.tsx';
 import { ResultScreen } from '../features/product-result/ResultScreen.tsx';
 import { ScannerPanel } from '../features/scanner/ScannerPanel.tsx';
 import { useBarcodeScanner } from '../features/scanner/useBarcodeScanner.ts';
+import { BrandMark } from '../ui/BrandMark.tsx';
 import { appServices } from './appServices.ts';
 import { useProductScan } from './useProductScan.ts';
 
@@ -17,76 +20,124 @@ const DebugPanel = import.meta.env.DEV
   ? lazy(async () => ({ default: (await import('../features/debug/DebugPanel.tsx')).DebugPanel }))
   : null;
 
+/** What the home area is showing. The scan session state machine is separate. */
+type HomeView = 'menu' | 'scan' | 'manual';
+
+const HOME_TITLE: Record<Exclude<HomeView, 'menu'>, string> = {
+  scan: 'סריקת ברקוד',
+  manual: 'הזנת ברקוד',
+};
+
+/**
+ * There is no bottom navigation, on purpose.
+ *
+ * Every primary action already lives on Home, one tap away, and the app has
+ * exactly one task: "can I use this product?". A tab bar would have added a
+ * permanent 56px of chrome to duplicate buttons the user can already see, on
+ * the same screens where vertical space decides whether the verdict is visible
+ * without scrolling.
+ */
 export default function App() {
   const { config, logger } = appServices;
   const scan = useProductScan();
-  const [manualOpen, setManualOpen] = useState(false);
+  const [homeView, setHomeView] = useState<HomeView>('menu');
 
   const scanner = useBarcodeScanner({
     logger,
     cooldownMs: config.scanner.duplicateScanCooldownMs,
-    onBarcode: (barcode) => {
-      setManualOpen(false);
-      void scan.check(barcode);
-    },
+    onBarcode: (barcode) => void scan.check(barcode),
   });
+
+  // Opening the scanner view starts the camera: the user asked for the camera,
+  // so making them tap a second button to get it would be pure friction.
+  const { start: startScanner, stop: stopScanner } = scanner;
+  useEffect(() => {
+    if (homeView === 'scan' && scan.screen === 'home') void startScanner();
+  }, [homeView, scan.screen, startScanner]);
+
+  const goHome = () => {
+    stopScanner();
+    setHomeView('menu');
+  };
 
   const handleScanAgain = () => {
     scan.reset();
-    scanner.stop();
+    stopScanner();
+    setHomeView('menu');
   };
 
   // Rejecting the identified product throws the lookup away and reopens the
   // camera, so the next scan starts from a clean slate.
   const handleReject = () => {
     scan.rejectProduct();
-    void scanner.start();
+    setHomeView('scan');
   };
 
+  const onHome = scan.screen === 'home';
+  const showBack = onHome && homeView !== 'menu';
+  const heading = onHome && homeView !== 'menu' ? HOME_TITLE[homeView] : null;
+
   return (
-    <div className={`app ${scan.screen === 'home' ? '' : 'app--compact'}`} dir="rtl" lang="he">
-      <header className="app__header">
-        <h1 className="app__title">AllergicGuard</h1>
-        <p className="app__subtitle">בדיקת מוצר לאלרגיית בוטנים</p>
-      </header>
+    <div className="app" dir="rtl" lang="he">
+      {/* Home carries the brand; inner screens carry the task. */}
+      {!(onHome && homeView === 'menu') && (
+        <header className="topbar">
+          {showBack ? (
+            <button type="button" className="topbar__back" onClick={goHome} aria-label="חזרה">
+              <ChevronRight size={22} aria-hidden="true" />
+            </button>
+          ) : (
+            <span className="topbar__slot" aria-hidden="true" />
+          )}
+          <div className="topbar__title">
+            {heading ?? (
+              <>
+                <BrandMark size={24} />
+                <span>AllergicGuard</span>
+              </>
+            )}
+          </div>
+          <span className="topbar__slot" aria-hidden="true" />
+        </header>
+      )}
 
       <main className="app__main">
-        {scan.screen === 'home' && (
-          <>
-            <ScannerPanel
-              state={scanner.state}
-              error={scanner.error}
-              videoRef={scanner.videoRef}
-              onStart={() => void scanner.start()}
-              onStop={scanner.stop}
-            />
+        {onHome && homeView === 'menu' && (
+          <HomeScreen
+            onScan={() => setHomeView('scan')}
+            onManual={() => setHomeView('manual')}
+            onPackagePhoto={scan.startPackagePhotoCheck}
+            packagePhotoAvailable={scan.packageScan.available}
+          />
+        )}
 
-            {manualOpen ? (
-              <ManualBarcodeInput
-                onSubmit={(barcode) => {
-                  scanner.stop();
-                  setManualOpen(false);
-                  void scan.check(barcode);
-                }}
-                onCancel={() => setManualOpen(false)}
-              />
-            ) : (
-              <button
-                type="button"
-                className="button button--secondary"
-                onClick={() => setManualOpen(true)}
-              >
-                הזנת ברקוד ידנית
-              </button>
-            )}
-          </>
+        {onHome && homeView === 'scan' && (
+          <ScannerPanel
+            state={scanner.state}
+            error={scanner.error}
+            videoRef={scanner.videoRef}
+            onStart={() => void startScanner()}
+            onStop={stopScanner}
+          />
+        )}
+
+        {onHome && homeView === 'manual' && (
+          <ManualBarcodeInput
+            onSubmit={(barcode) => {
+              stopScanner();
+              void scan.check(barcode);
+            }}
+            onCancel={goHome}
+          />
         )}
 
         {scan.screen === 'looking_up' && (
           <section className="loading" aria-live="polite">
-            <div className="loading__spinner" aria-hidden="true" />
+            <span className="capture__spinner" aria-hidden="true" />
             <p className="loading__text">בודקים את המוצר…</p>
-            <p className="loading__barcode">{scan.barcodeInFlight}</p>
+            <p className="loading__barcode" dir="ltr">
+              {scan.barcodeInFlight}
+            </p>
           </section>
         )}
 
@@ -108,9 +159,7 @@ export default function App() {
       </main>
 
       <footer className="app__footer">
-        <p>
-          הכלי מסייע בבדיקת מידע ואינו מחליף בדיקת סימון האלרגנים שעל האריזה.
-        </p>
+        הכלי מסייע בבדיקת מידע ואינו מחליף בדיקת סימון האלרגנים שעל האריזה.
       </footer>
 
       {config.debugPanelEnabled && DebugPanel && (

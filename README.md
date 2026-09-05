@@ -92,10 +92,17 @@ never a dead end: see [Package photo analysis](#package-photo-analysis-active).
 
 ## The flow
 
+Three ways in, all visible on Home without scrolling — barcode scanning is the
+primary path, and the package photo is a **first-class entry point**, not an
+ORANGE fallback. A user abroad, or holding a product no database has heard of,
+can go straight to the camera.
+
 ```
 OPEN APP
    ↓
-SCAN BARCODE  (or type it)
+SCAN BARCODE  ·  TYPE BARCODE  ·  PHOTOGRAPH THE PACK
+   ↓                                      ↓
+   ↓                          (no barcode: straight to analysis)
    ↓
 CONFIRM       "האם זה המוצר שסרקת?"   ← barcode ↔ package, nothing more
    ↓                └─ "לא" → lookup discarded, scanner reopens
@@ -123,11 +130,58 @@ entirely, because allergen data for the wrong product is worse than none.
 
 ### Results-first layout
 
-The target user is kindergarten staff, often holding a child. The first
-viewport carries **identity → verdict → the one action to take**, in that
-order. Provider names, reliability grades, timestamps, missing fields, evidence
-lists and conflicts live below, inside a collapsed `מידע נוסף`. Nothing
-technical may appear above the verdict.
+The target user is kindergarten staff, often holding a child. Every result
+screen answers three questions, top to bottom, once each:
+
+1. **what product am I checking?** — image, name, brand. The 13-digit barcode is
+   deliberately quiet; it is a machine identifier that was competing with the
+   product name while helping nobody read it.
+2. **what did we conclude?** — the verdict.
+3. **what do I do now?** — one action.
+
+Provider names, reliability grades, timestamps, missing fields, evidence and
+conflicts live inside a collapsed `פרטי הבדיקה והמקורות`. Nothing was removed —
+it is one tap away — it simply stopped competing with the answer.
+
+### The three states are not one component in three colours
+
+This is the most important rule in the interface. Visual intensity follows
+meaning, not the amount of data we happen to hold:
+
+| State | Meaning | Treatment |
+| --- | --- | --- |
+| **RED** | a real, known risk | loud on purpose: full danger block, large mark, the reason spelled out and the package wording quoted verbatim |
+| **ORANGE** | we do not know enough yet | a compact status line. No panel, no border, no drama — it is a step in a process, and the screen's weight belongs to the action that follows it |
+| **GREEN** | no indication found | calm and positive, with the "this is not a safety claim" caveat kept small rather than shouted |
+
+Making ORANGE look like RED taught users to ignore both. On a 390×844 phone the
+whole ORANGE interaction — product, status, instruction, camera button — lands
+inside the first ~520px, with no scrolling.
+
+### No bottom navigation
+
+Deliberately. Every primary action already lives on Home, one tap away, and the
+app has exactly one task: *can I use this product?* A tab bar would have added a
+permanent strip of chrome to duplicate visible buttons, on the same screens
+where vertical space decides whether the verdict is visible without scrolling.
+
+### Brand
+
+The supplied logo lives in `public/` and is loaded by URL, so replacing the file
+needs no code change: `logo.png` is the full lockup (Home only), `logo-mark.png`
+the shield alone (compact headers, favicon), and `icon-192/512.png` the PWA
+icons. All are the supplied artwork — trimmed, cropped and resized, never
+redrawn. `BrandMark` falls back to a neutral shield if a file is missing, since
+a wrong logo is worse than no logo. Although the shield contains a peanut, the
+surrounding UI stays allergen-agnostic so the product can add allergens without
+a rebrand.
+
+### Design tokens
+
+`src/ui/tokens.css` holds every colour, space, radius, shadow and type step. If
+a value is not there it should not appear in a component. Colour is semantic:
+`--danger` means "a real, known allergen risk", never "an error"; `--warn` means
+"we do not know enough yet", which is actionable rather than alarming.
 
 ---
 
@@ -374,7 +428,7 @@ responses, so allergen data is never served stale.
 ## Tests
 
 ```bash
-npm test     # 238 tests, no network access
+npm test     # 261 tests, no network access
 ```
 
 Coverage focuses on what can hurt a child:
@@ -412,6 +466,13 @@ Coverage focuses on what can hurt a child:
   reports an error rather than empty evidence when all of them fail.
 * **Remote Vision** — disabled without a proxy, sends no credential, runs proxy
   text through the same rules, and cannot clear a product whatever it returns.
+* **Presentation** — Home offers all three check methods and no history
+  destination; ORANGE shows the photo CTA outside any disclosure and states the
+  missing-data fact exactly once; RED leads with danger, reason and instruction
+  and offers no further photo; GREEN never says "safe" and keeps its caveat;
+  technical detail stays collapsed but present; retake and processing states
+  render without diagnostics; confirmation asks about identity only and never
+  leaks the verdict. Behaviour, not CSS values.
 * **Aggregator, matchers, HTTP layer, cache, barcode validation.**
 
 Unit tests never touch the live API. For real-world checks use the dev tool:

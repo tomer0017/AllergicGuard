@@ -6,13 +6,19 @@
  * to the network so allergen information is never served from a stale cache.
  */
 
-const CACHE_NAME = 'allergicguard-shell-v1';
+const CACHE_NAME = 'allergicguard-shell-v2';
 
 // The app may be hosted under a sub-path (GitHub Pages), so every shell URL is
 // resolved against the directory this worker was served from.
 const BASE = new URL('./', self.location.href).href;
 const INDEX_URL = `${BASE}index.html`;
-const APP_SHELL = [BASE, INDEX_URL, `${BASE}manifest.webmanifest`];
+const APP_SHELL = [
+  BASE,
+  INDEX_URL,
+  `${BASE}manifest.webmanifest`,
+  `${BASE}logo.png`,
+  `${BASE}logo-mark.png`,
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).catch(() => undefined));

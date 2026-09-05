@@ -86,6 +86,8 @@ export interface ProductScanApi {
   readonly pendingConfirmation: ProductLookupResult | null;
   readonly packageScan: PackageScanApi;
   check: (barcode: string) => Promise<void>;
+  /** Start a check from a package photo alone, with no barcode. */
+  startPackagePhotoCheck: () => void;
   confirmProduct: () => void;
   rejectProduct: () => void;
   reset: () => void;
@@ -244,6 +246,43 @@ export function useProductScan(): ProductScanApi {
     }
   }, []);
 
+  /**
+   * Package-photo-only check: no barcode, no lookup, no confirmation step.
+   *
+   * For a user abroad, holding a product no database has heard of, or one whose
+   * barcode will not scan. The starting verdict is NOT invented here — it comes
+   * from the same pure engine with an empty evidence set, which by the existing
+   * rules is `insufficient_data`. The photo is then merged through exactly the
+   * same path as in the barcode flow, so every safety rule still applies and a
+   * photo still cannot produce GREEN.
+   */
+  const startPackagePhotoCheck = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+
+    const requestId = createRequestId();
+    const base: ProductLookupResult = {
+      requestId,
+      barcode: '',
+      allergen: 'peanut',
+      product: null,
+      assessment: assessPeanutRisk({ evidence: [] }),
+      evidence: [],
+      providerResults: [],
+      conflicts: [],
+      generatedAt: new Date().toISOString(),
+    };
+
+    appServices.logger.info('PRODUCT', 'package-photo-only check started', { requestId });
+
+    clearPackageState();
+    setPending(null);
+    setBarcodeInFlight(null);
+    resultRef.current = base;
+    setResult(base);
+    setScreen('result');
+  }, [clearPackageState]);
+
   const reset = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -270,6 +309,7 @@ export function useProductScan(): ProductScanApi {
       dismissRetake: () => setRetake(null),
     },
     check,
+    startPackagePhotoCheck,
     confirmProduct,
     rejectProduct,
     reset,
